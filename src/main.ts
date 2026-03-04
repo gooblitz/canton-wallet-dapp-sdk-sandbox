@@ -160,7 +160,6 @@ const layoutEls = {
 
 const DEFAULT_WALLET_DOMAIN = 'https://lat-dn.cddev.site';
 const DEFAULT_DEVNET_REGISTRY_DOMAIN = 'https://sp-lat-dn.cddev.site';
-const DEFAULT_SCAN_PROXY_BASE_PATH = '/v0/scan-proxy';
 const DEFAULT_REGISTRY_PROXY_BASE_PATH = '/api/registry-proxy';
 const DOMAIN_SETTINGS_STORAGE_KEY = 'local_dapp_domain_settings_v1';
 const REGISTRY_URLS_STORAGE_KEY = 'local_dapp_registry_urls_v1';
@@ -186,8 +185,12 @@ const initialDevnetRegistryDomain = normalizeDomainValue(
   ENV_REGISTRY_DOMAIN,
 );
 const ENV_SINGLE_REGISTRY_URL =
-  import.meta.env.VITE_TOKEN_REGISTRY_URL?.toString().trim() || DEFAULT_REGISTRY_PROXY_BASE_PATH;
-const ENV_SCAN_URL = import.meta.env.VITE_SCAN_URL?.toString().trim() || DEFAULT_REGISTRY_PROXY_BASE_PATH;
+  import.meta.env.VITE_TOKEN_REGISTRY_URL?.toString().trim()
+  || ENV_REGISTRY_URLS.devnet
+  || DEFAULT_REGISTRY_PROXY_BASE_PATH;
+const ENV_SCAN_URL =
+  import.meta.env.VITE_SCAN_URL?.toString().trim()
+  || DEFAULT_REGISTRY_PROXY_BASE_PATH;
 const ENV_REGISTRY_API_KEY = import.meta.env.VITE_REGISTRY_API_KEY?.toString().trim() || '';
 
 els.walletDomain.value = initialWalletDomain;
@@ -238,8 +241,7 @@ const logEntries: string[] = [];
 els.transferFactoryTemplateId.value = els.transferFactoryTemplateId.value.trim() || TRANSFER_FACTORY_TEMPLATE_ID;
 els.scanUrl.value = ENV_SCAN_URL;
 if (!els.registryUrl.value.trim()) {
-  const bootstrapRegistryUrl =
-    ENV_SINGLE_REGISTRY_URL || ENV_REGISTRY_URLS.devnet || loadRegistryUrlStore().devnet || '';
+  const bootstrapRegistryUrl = ENV_SINGLE_REGISTRY_URL || loadRegistryUrlStore().devnet || '';
   if (bootstrapRegistryUrl) {
     els.registryUrl.value = bootstrapRegistryUrl;
   }
@@ -365,10 +367,6 @@ function saveDomainSettingsStore(store: DomainSettingsStore): void {
   localStorage.setItem(DOMAIN_SETTINGS_STORAGE_KEY, JSON.stringify(store));
 }
 
-function buildRegistryBaseURL(domain: string): string {
-  return joinUrl(normalizeDomainValue(domain, ENV_REGISTRY_DOMAIN), DEFAULT_SCAN_PROXY_BASE_PATH);
-}
-
 function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string): string {
   const parsed = parseUrl(scanBaseURL);
   const path = parsed?.pathname || '';
@@ -385,7 +383,7 @@ function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string):
 function applyDomainSettings(persist = true): void {
   const walletDomain = normalizeDomainValue(els.walletDomain.value, ENV_WALLET_DOMAIN);
   const devnetRegistryDomain = normalizeDomainValue(els.devnetRegistryDomain.value, ENV_REGISTRY_DOMAIN);
-  const derivedRegistryURL = buildRegistryBaseURL(devnetRegistryDomain);
+  const derivedRegistryURL = DEFAULT_REGISTRY_PROXY_BASE_PATH;
   els.walletDomain.value = walletDomain;
   els.devnetRegistryDomain.value = devnetRegistryDomain;
   els.remoteUrl.value = joinUrl(walletDomain, '/api/v1/dapp');
@@ -1082,6 +1080,22 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
+function isRegistryProxyEndpoint(endpoint: string): boolean {
+  const normalizedEndpoint = endpoint.trim();
+  if (!normalizedEndpoint) {
+    return false;
+  }
+  if (normalizedEndpoint.startsWith(DEFAULT_REGISTRY_PROXY_BASE_PATH)) {
+    return true;
+  }
+  const parsedEndpoint = parseUrl(normalizedEndpoint);
+  if (!parsedEndpoint) {
+    return false;
+  }
+  return parsedEndpoint.origin === window.location.origin
+    && parsedEndpoint.pathname.startsWith(DEFAULT_REGISTRY_PROXY_BASE_PATH);
+}
+
 function getRequiredRegistryAPIKey(): string {
   const key = els.registryApiKey.value.trim();
   if (!key) {
@@ -1101,7 +1115,14 @@ async function fetchWithAPIKey(endpoint: string, init: RequestInit): Promise<Res
 }
 
 async function fetchForRegistryDiscovery(endpoint: string, init: RequestInit): Promise<Response> {
-  return fetchWithAPIKey(endpoint, init);
+  const normalizedEndpoint = endpoint.trim();
+  const isAbsoluteEndpoint = parseUrl(normalizedEndpoint) !== null;
+  if (!isAbsoluteEndpoint && !isRegistryProxyEndpoint(normalizedEndpoint)) {
+    throw new Error(
+      'Relative Registry / Scan endpoints must use /api/registry-proxy. Use an absolute URL for direct Registry / Scan endpoints.',
+    );
+  }
+  return fetchWithAPIKey(normalizedEndpoint, init);
 }
 
 function applyResolvedTransferContext(result: ResolvedTransferContext): void {
@@ -1276,7 +1297,7 @@ async function fetchRegistryAdminId(registryUrl: string): Promise<string> {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network layer. If using default /api/registry-proxy, ensure scan-proxy-backend is running at http://127.0.0.1:8086; otherwise use a browser-accessible registry endpoint (CORS).',
+        `Registry fetch failed at network layer for ${endpoint}. Ensure /api/registry-proxy is active and SCAN_PROXY_BACKEND_URL is reachable (default https://sp-lat-dn.cddev.site).`,
       );
     }
     throw err;
@@ -1319,7 +1340,7 @@ async function fetchTransferContextFromRegistry(
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network layer. If using default /api/registry-proxy, ensure scan-proxy-backend is running at http://127.0.0.1:8086. Also verify your API key.',
+        `Registry fetch failed at network layer for ${endpoint}. Ensure /api/registry-proxy is active, SCAN_PROXY_BACKEND_URL is reachable, and your Registry / Scan API key is correct.`,
       );
     }
     throw err;

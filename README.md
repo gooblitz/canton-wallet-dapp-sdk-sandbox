@@ -15,8 +15,9 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 ## Prerequisites
 
 1. A reachable wallet endpoint (`remote` mode) or wallet browser extension (`extension` mode).
-2. A scan-proxy backend endpoint for registry discovery (default local target: `http://127.0.0.1:8086`).
-3. API key accepted by that scan-proxy backend.
+2. Reachability to scan-proxy upstream (default: `https://sp-lat-dn.cddev.site`).
+3. API key accepted by that scan-proxy endpoint.
+4. No separate proxy/backend process is required for this sandbox.
 
 Optional dApp env for registry discovery:
 
@@ -25,7 +26,9 @@ VITE_REGISTRY_DOMAIN='https://sp-lat-dn.cddev.site' # default domain used by "Re
 VITE_REGISTRY_URLS_JSON='{"devnet":"https://registry.devnet.example.com","mainnet":"https://registry.mainnet.example.com"}'
 VITE_TOKEN_REGISTRY_URL='/api/registry-proxy' # recommended default
 VITE_SCAN_URL='/api/registry-proxy'           # recommended default
-SCAN_PROXY_BACKEND_URL='http://127.0.0.1:8086' # Vite dev proxy target
+SCAN_PROXY_BACKEND_URL='https://sp-lat-dn.cddev.site' # Vite proxy upstream target
+# Optional upstream auth header:
+# SCAN_PROXY_UPSTREAM_AUTH='Bearer <token>'
 ```
 
 ## Run
@@ -47,7 +50,7 @@ Open: `http://127.0.0.1:4174`
    - If the wallet requires user interaction, errors may include `data.userUrl`; the app auto-opens it.
 5. To prefill a transfer command for `prepareExecute`:
    - Fill recipient and amount.
-   - Keep `Registry URL` as `/api/registry-proxy` unless you have a custom endpoint.
+   - Keep `Registry URL` as `/api/registry-proxy` (proxy-only mode).
    - Set `Expected Admin` (or `Instrument Admin`) under `Advanced (optional)`.
    - Click `Resolve context` (or use `Refresh context`) to query:
      - `POST /registry/transfer-instruction/v1/transfer-factory`
@@ -77,29 +80,22 @@ Open: `http://127.0.0.1:4174`
   - `VITE_WALLET_RPC_URL=https://lat-dn.cddev.site/api/v1/dapp`
   - `VITE_TOKEN_REGISTRY_URL=/api/registry-proxy`
   - `VITE_SCAN_URL=/api/registry-proxy`
-  - `SCAN_PROXY_BACKEND_URL=http://127.0.0.1:8086`
-- ACS/`/v2/state/active-contracts` factory discovery has been removed from this dApp.
-- Registry discovery defaults to same-origin `/api/registry-proxy`, which Vite rewrites to your scan-proxy backend `/v0/scan-proxy/*`.
-- Requests include `X-API-Key` from the UI; upstream bearer/JWT auth is handled by your scan-proxy backend configuration.
+  - `SCAN_PROXY_BACKEND_URL=https://sp-lat-dn.cddev.site`
+- Registry discovery is proxy-only via same-origin `/api/registry-proxy`.
+- Requests include `X-API-Key` from the UI; Vite forwards to configured upstream scan-proxy.
 - The app auto-normalizes `TransferFactory` template IDs before submit (adds `#` for package-name IDs).
 - In `remote` mode, this sandbox uses direct JSON-RPC for `getPrimaryAccount`, `signMessage`, and `prepareExecuteAndWait` so testing is not blocked by SDK remote-provider method coverage.
 
 ## Troubleshooting
 
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
-  - Verify `Registry / Scan API Key` in the UI matches a configured key in your scan-proxy backend.
+  - Verify `Registry / Scan API Key` in the UI matches a configured key for your upstream scan-proxy.
+  - If upstream expects bearer auth too, set `SCAN_PROXY_UPSTREAM_AUTH`.
   - Restart `npm run dev` after env changes.
 - `discoverTransferFactory -> Registry fetch failed at network layer`
-  - Ensure scan-proxy backend is running and reachable at `SCAN_PROXY_BACKEND_URL` (default `http://127.0.0.1:8086`).
-  - If using a non-default target, set `SCAN_PROXY_BACKEND_URL` and restart `npm run dev`.
-- `connect()` fails in remote mode due to CORS / network errors
-  - This is mainly for integrators/self-hosters. Ensure wallet backend CORS allows this dApp origin.
-  - Example backend env:
-    ```bash
-    CORS_ALLOWED_ORIGINS="http://wallet.localhost:5183,http://127.0.0.1:4174"
-    FRONTEND_URL="http://wallet.localhost:5183"
-    ```
-  - If you use a different host/port for this app, add it to `CORS_ALLOWED_ORIGINS`.
+  - Ensure `/api/registry-proxy` is available (run `npm run dev`).
+  - Ensure `SCAN_PROXY_BACKEND_URL` is reachable (default `https://sp-lat-dn.cddev.site`).
+  - Verify your API key is present and valid.
 - `TEMPLATES_OR_INTERFACES_NOT_FOUND` with `pkg:Module:Template`
   - `commands JSON` still has the placeholder command.
   - Click `Prefill prepareExecute transfer` and submit the generated `ExerciseCommand` for `TransferFactory_Transfer`.

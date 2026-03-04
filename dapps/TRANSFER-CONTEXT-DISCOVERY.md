@@ -2,14 +2,7 @@
 
 ## Goal
 
-Use a wallet-agnostic transfer prefill flow without relying on party ACS visibility of `TransferFactory`.
-
-## What Was Removed
-
-- Legacy TransferFactory discovery via:
-  - `GET /v2/state/ledger-end`
-  - `POST /v2/state/active-contracts`
-- Multi-factory ACS selector logic and related cache/state.
+Use a wallet-agnostic transfer prefill flow based on Token Standard registry APIs.
 
 ## Current Flow
 
@@ -23,7 +16,7 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
 3. Query Token Standard off-ledger API via configured registry base URL:
    - `POST {registryUrl}/registry/transfer-instruction/v1/transfer-factory`
    - send `X-API-Key` from dApp settings
-   - default setup uses `registryUrl=/api/registry-proxy` (same-origin), rewritten by Vite to `/v0/scan-proxy/*` on `SCAN_PROXY_BACKEND_URL`
+   - default setup uses `registryUrl=/api/registry-proxy` (same-origin Vite proxy)
 4. Use response to prefill:
    - `factoryId` -> `ExerciseCommand.contractId`
    - `choiceContext.choiceContextData` -> `extraArgs.context`
@@ -38,7 +31,8 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
    - env `VITE_REGISTRY_URLS_JSON`
    - env `VITE_TOKEN_REGISTRY_URL` (devnet fallback)
 3. CNS fallback (if `Scan URL` + instrument admin are available):
-   - `GET {scanUrl}/v0/ans-entries/by-party/{adminParty}`
+   - default proxy path: `GET {scanUrl}/ans-entries/by-party/{adminParty}`
+   - non-proxy scan base path: `GET {scanUrl}/v0/ans-entries/by-party/{adminParty}`
    - parse description metadata key:
      - `splice.lfdecentralizedtrust.org/registryUrls`
 
@@ -55,4 +49,4 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
 
 - Wallet interaction remains CIP-0103 dApp API.
 - Transfer factory/context discovery uses Token Standard off-ledger registry API.
-- dApp-side discovery auth is API-key based; upstream bearer/JWT auth can be handled by scan-proxy backend.
+- dApp-side discovery auth is API-key based via same-origin `/api/registry-proxy` (Vite proxy to scan-proxy upstream).
