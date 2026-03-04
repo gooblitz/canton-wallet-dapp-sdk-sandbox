@@ -85,6 +85,8 @@ type RegistryUrlStore = Record<string, string>;
 
 type DomainSettingsStore = {
   walletDomain?: string;
+  registryDomain?: string;
+  // Legacy key kept for backward compatibility with existing localStorage.
   devnetRegistryDomain?: string;
 };
 
@@ -171,15 +173,17 @@ const ENV_WALLET_DOMAIN = normalizeDomainValue(
   import.meta.env.VITE_WALLET_DOMAIN?.toString().trim() || DEFAULT_WALLET_DOMAIN,
   DEFAULT_WALLET_DOMAIN,
 );
-const ENV_DEVNET_REGISTRY_DOMAIN = normalizeDomainValue(
-  import.meta.env.VITE_DEVNET_REGISTRY_DOMAIN?.toString().trim() || DEFAULT_DEVNET_REGISTRY_DOMAIN,
+const ENV_REGISTRY_DOMAIN = normalizeDomainValue(
+  import.meta.env.VITE_REGISTRY_DOMAIN?.toString().trim()
+    || import.meta.env.VITE_DEVNET_REGISTRY_DOMAIN?.toString().trim()
+    || DEFAULT_DEVNET_REGISTRY_DOMAIN,
   DEFAULT_DEVNET_REGISTRY_DOMAIN,
 );
 const savedDomainSettings = loadDomainSettingsStore();
 const initialWalletDomain = normalizeDomainValue(savedDomainSettings.walletDomain || ENV_WALLET_DOMAIN, ENV_WALLET_DOMAIN);
 const initialDevnetRegistryDomain = normalizeDomainValue(
-  savedDomainSettings.devnetRegistryDomain || ENV_DEVNET_REGISTRY_DOMAIN,
-  ENV_DEVNET_REGISTRY_DOMAIN,
+  savedDomainSettings.registryDomain || savedDomainSettings.devnetRegistryDomain || ENV_REGISTRY_DOMAIN,
+  ENV_REGISTRY_DOMAIN,
 );
 const ENV_SINGLE_REGISTRY_URL =
   import.meta.env.VITE_TOKEN_REGISTRY_URL?.toString().trim() || DEFAULT_REGISTRY_PROXY_BASE_PATH;
@@ -345,6 +349,9 @@ function loadDomainSettingsStore(): DomainSettingsStore {
     if (typeof obj.walletDomain === 'string') {
       out.walletDomain = obj.walletDomain.trim();
     }
+    if (typeof obj.registryDomain === 'string') {
+      out.registryDomain = obj.registryDomain.trim();
+    }
     if (typeof obj.devnetRegistryDomain === 'string') {
       out.devnetRegistryDomain = obj.devnetRegistryDomain.trim();
     }
@@ -359,7 +366,7 @@ function saveDomainSettingsStore(store: DomainSettingsStore): void {
 }
 
 function buildRegistryBaseURL(domain: string): string {
-  return joinUrl(normalizeDomainValue(domain, ENV_DEVNET_REGISTRY_DOMAIN), DEFAULT_SCAN_PROXY_BASE_PATH);
+  return joinUrl(normalizeDomainValue(domain, ENV_REGISTRY_DOMAIN), DEFAULT_SCAN_PROXY_BASE_PATH);
 }
 
 function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string): string {
@@ -377,7 +384,7 @@ function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string):
 
 function applyDomainSettings(persist = true): void {
   const walletDomain = normalizeDomainValue(els.walletDomain.value, ENV_WALLET_DOMAIN);
-  const devnetRegistryDomain = normalizeDomainValue(els.devnetRegistryDomain.value, ENV_DEVNET_REGISTRY_DOMAIN);
+  const devnetRegistryDomain = normalizeDomainValue(els.devnetRegistryDomain.value, ENV_REGISTRY_DOMAIN);
   const derivedRegistryURL = buildRegistryBaseURL(devnetRegistryDomain);
   els.walletDomain.value = walletDomain;
   els.devnetRegistryDomain.value = devnetRegistryDomain;
@@ -388,6 +395,7 @@ function applyDomainSettings(persist = true): void {
   if (persist) {
     saveDomainSettingsStore({
       walletDomain,
+      registryDomain: devnetRegistryDomain,
       devnetRegistryDomain,
     });
   }
@@ -398,7 +406,7 @@ function applyDomainSettingsFromInputs(): void {
     applyDomainSettings(true);
     appendLog('OK', 'settings -> applied domain defaults', {
       walletDomain: els.walletDomain.value.trim(),
-      devnetRegistryDomain: els.devnetRegistryDomain.value.trim(),
+      registryDomain: els.devnetRegistryDomain.value.trim(),
       remoteUrl: els.remoteUrl.value.trim(),
       registryUrl: els.registryUrl.value.trim(),
       scanUrl: els.scanUrl.value.trim(),

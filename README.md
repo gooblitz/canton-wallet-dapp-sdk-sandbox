@@ -21,6 +21,7 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 Optional dApp env for registry discovery:
 
 ```bash
+VITE_REGISTRY_DOMAIN='https://sp-lat-dn.cddev.site' # default domain used by "Registry Domain (Default)"
 VITE_REGISTRY_URLS_JSON='{"devnet":"https://registry.devnet.example.com","mainnet":"https://registry.mainnet.example.com"}'
 VITE_TOKEN_REGISTRY_URL='/api/registry-proxy' # recommended default
 VITE_SCAN_URL='/api/registry-proxy'           # recommended default
