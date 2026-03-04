@@ -14,17 +14,8 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 
 ## Prerequisites
 
-1. Wallet backend and frontend running locally.
-2. Backend CORS must allow this dApp origin when using `remote` provider.
-
-Example backend env:
-
-```bash
-CORS_ALLOWED_ORIGINS="http://wallet.localhost:5183,http://127.0.0.1:4174"
-FRONTEND_URL="http://wallet.localhost:5183"
-```
-
-If you use a different host/port for this app, add it to `CORS_ALLOWED_ORIGINS`.
+1. A reachable wallet endpoint (`remote` mode) or wallet browser extension (`extension` mode).
+2. Registry/scan API key (for transfer-context discovery).
 
 Optional dApp env for registry discovery:
 
@@ -94,6 +85,14 @@ Open: `http://127.0.0.1:4174`
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
   - Verify `Registry / Scan API Key` in the UI.
   - Restart `npm run dev` after env changes.
+- `connect()` fails in remote mode due to CORS / network errors
+  - This is mainly for integrators/self-hosters. Ensure wallet backend CORS allows this dApp origin.
+  - Example backend env:
+    ```bash
+    CORS_ALLOWED_ORIGINS="http://wallet.localhost:5183,http://127.0.0.1:4174"
+    FRONTEND_URL="http://wallet.localhost:5183"
+    ```
+  - If you use a different host/port for this app, add it to `CORS_ALLOWED_ORIGINS`.
 - `TEMPLATES_OR_INTERFACES_NOT_FOUND` with `pkg:Module:Template`
   - `commands JSON` still has the placeholder command.
   - Click `Prefill prepareExecute transfer` and submit the generated `ExerciseCommand` for `TransferFactory_Transfer`.
