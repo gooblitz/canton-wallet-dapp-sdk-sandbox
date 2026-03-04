@@ -159,6 +159,7 @@ const layoutEls = {
 const DEFAULT_WALLET_DOMAIN = 'https://lat-dn.cddev.site';
 const DEFAULT_DEVNET_REGISTRY_DOMAIN = 'https://sp-lat-dn.cddev.site';
 const DEFAULT_SCAN_PROXY_BASE_PATH = '/v0/scan-proxy';
+const DEFAULT_REGISTRY_PROXY_BASE_PATH = '/api/registry-proxy';
 const DOMAIN_SETTINGS_STORAGE_KEY = 'local_dapp_domain_settings_v1';
 const REGISTRY_URLS_STORAGE_KEY = 'local_dapp_registry_urls_v1';
 const REGISTRY_URLS_META_KEY = 'splice.lfdecentralizedtrust.org/registryUrls';
@@ -180,9 +181,9 @@ const initialDevnetRegistryDomain = normalizeDomainValue(
   savedDomainSettings.devnetRegistryDomain || ENV_DEVNET_REGISTRY_DOMAIN,
   ENV_DEVNET_REGISTRY_DOMAIN,
 );
-const defaultDevnetRegistryURL = buildRegistryBaseURL(initialDevnetRegistryDomain);
-const ENV_SINGLE_REGISTRY_URL = import.meta.env.VITE_TOKEN_REGISTRY_URL?.toString().trim() || defaultDevnetRegistryURL;
-const ENV_SCAN_URL = import.meta.env.VITE_SCAN_URL?.toString().trim() || defaultDevnetRegistryURL;
+const ENV_SINGLE_REGISTRY_URL =
+  import.meta.env.VITE_TOKEN_REGISTRY_URL?.toString().trim() || DEFAULT_REGISTRY_PROXY_BASE_PATH;
+const ENV_SCAN_URL = import.meta.env.VITE_SCAN_URL?.toString().trim() || DEFAULT_REGISTRY_PROXY_BASE_PATH;
 const ENV_REGISTRY_API_KEY = import.meta.env.VITE_REGISTRY_API_KEY?.toString().trim() || '';
 
 els.walletDomain.value = initialWalletDomain;
@@ -364,8 +365,11 @@ function buildRegistryBaseURL(domain: string): string {
 function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string): string {
   const parsed = parseUrl(scanBaseURL);
   const path = parsed?.pathname || '';
-  const ansEntriesPath = path.includes('/scan-proxy/')
+  const normalizedBase = scanBaseURL.trim().toLowerCase();
+  const usesScanProxyStyleBase = path.includes('/scan-proxy/')
     || path.endsWith('/scan-proxy')
+    || normalizedBase.includes('/api/registry-proxy');
+  const ansEntriesPath = usesScanProxyStyleBase
     ? `/ans-entries/by-party/${encodeURIComponent(adminPartyId)}`
     : `/v0/ans-entries/by-party/${encodeURIComponent(adminPartyId)}`;
   return joinUrl(scanBaseURL, ansEntriesPath);
@@ -1264,7 +1268,7 @@ async function fetchRegistryAdminId(registryUrl: string): Promise<string> {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network/CORS layer. Ensure the registry endpoint is browser-accessible and allows your dApp origin (CORS).',
+        'Registry fetch failed at network layer. If using default /api/registry-proxy, ensure scan-proxy-backend is running at http://127.0.0.1:8086; otherwise use a browser-accessible registry endpoint (CORS).',
       );
     }
     throw err;
@@ -1307,7 +1311,7 @@ async function fetchTransferContextFromRegistry(
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network/CORS layer. Ensure the registry endpoint is browser-accessible (CORS) and your API key is valid.',
+        'Registry fetch failed at network layer. If using default /api/registry-proxy, ensure scan-proxy-backend is running at http://127.0.0.1:8086. Also verify your API key.',
       );
     }
     throw err;

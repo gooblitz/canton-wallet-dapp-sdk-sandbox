@@ -15,14 +15,16 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 ## Prerequisites
 
 1. A reachable wallet endpoint (`remote` mode) or wallet browser extension (`extension` mode).
-2. Registry/scan API key (for transfer-context discovery).
+2. A scan-proxy backend endpoint for registry discovery (default local target: `http://127.0.0.1:8086`).
+3. API key accepted by that scan-proxy backend.
 
 Optional dApp env for registry discovery:
 
 ```bash
 VITE_REGISTRY_URLS_JSON='{"devnet":"https://registry.devnet.example.com","mainnet":"https://registry.mainnet.example.com"}'
-VITE_TOKEN_REGISTRY_URL='https://registry.devnet.example.com' # fallback for devnet
-VITE_SCAN_URL='https://scan.devnet.example.com'               # optional CNS fallback
+VITE_TOKEN_REGISTRY_URL='/api/registry-proxy' # recommended default
+VITE_SCAN_URL='/api/registry-proxy'           # recommended default
+SCAN_PROXY_BACKEND_URL='http://127.0.0.1:8086' # Vite dev proxy target
 ```
 
 ## Run
@@ -44,7 +46,7 @@ Open: `http://127.0.0.1:4174`
    - If the wallet requires user interaction, errors may include `data.userUrl`; the app auto-opens it.
 5. To prefill a transfer command for `prepareExecute`:
    - Fill recipient and amount.
-   - Set `Registry URL` (or let the app resolve it from network config/CNS fallback).
+   - Keep `Registry URL` as `/api/registry-proxy` unless you have a custom endpoint.
    - Set `Expected Admin` (or `Instrument Admin`) under `Advanced (optional)`.
    - Click `Resolve context` (or use `Refresh context`) to query:
      - `POST /registry/transfer-instruction/v1/transfer-factory`
@@ -72,19 +74,23 @@ Open: `http://127.0.0.1:4174`
 - Transfer context lookup is cached for a short TTL per `(networkId, partyId, registryUrl, transfer args)`.
 - Default fallbacks (when env vars are unset):
   - `VITE_WALLET_RPC_URL=https://lat-dn.cddev.site/api/v1/dapp`
-  - `VITE_TOKEN_REGISTRY_URL=https://sp-lat-dn.cddev.site/v0/scan-proxy`
-  - `VITE_SCAN_URL=https://sp-lat-dn.cddev.site/v0/scan-proxy`
+  - `VITE_TOKEN_REGISTRY_URL=/api/registry-proxy`
+  - `VITE_SCAN_URL=/api/registry-proxy`
+  - `SCAN_PROXY_BACKEND_URL=http://127.0.0.1:8086`
 - ACS/`/v2/state/active-contracts` factory discovery has been removed from this dApp.
-- Registry discovery uses direct browser fetch with `X-API-Key` (no proxy).
-- Registry/scan endpoints must allow your dApp origin via CORS.
+- Registry discovery defaults to same-origin `/api/registry-proxy`, which Vite rewrites to your scan-proxy backend `/v0/scan-proxy/*`.
+- Requests include `X-API-Key` from the UI; upstream bearer/JWT auth is handled by your scan-proxy backend configuration.
 - The app auto-normalizes `TransferFactory` template IDs before submit (adds `#` for package-name IDs).
 - In `remote` mode, this sandbox uses direct JSON-RPC for `getPrimaryAccount`, `signMessage`, and `prepareExecuteAndWait` so testing is not blocked by SDK remote-provider method coverage.
 
 ## Troubleshooting
 
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
-  - Verify `Registry / Scan API Key` in the UI.
+  - Verify `Registry / Scan API Key` in the UI matches a configured key in your scan-proxy backend.
   - Restart `npm run dev` after env changes.
+- `discoverTransferFactory -> Registry fetch failed at network layer`
+  - Ensure scan-proxy backend is running and reachable at `SCAN_PROXY_BACKEND_URL` (default `http://127.0.0.1:8086`).
+  - If using a non-default target, set `SCAN_PROXY_BACKEND_URL` and restart `npm run dev`.
 - `connect()` fails in remote mode due to CORS / network errors
   - This is mainly for integrators/self-hosters. Ensure wallet backend CORS allows this dApp origin.
   - Example backend env:

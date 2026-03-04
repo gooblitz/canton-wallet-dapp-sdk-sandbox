@@ -20,10 +20,10 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
    - instrument id/admin
    - expected admin
 2. Resolve registry URL.
-3. Query Token Standard off-ledger API directly:
+3. Query Token Standard off-ledger API via configured registry base URL:
    - `POST {registryUrl}/registry/transfer-instruction/v1/transfer-factory`
    - send `X-API-Key` from dApp settings
-   - endpoint must allow dApp origin via CORS
+   - default setup uses `registryUrl=/api/registry-proxy` (same-origin), rewritten by Vite to `/v0/scan-proxy/*` on `SCAN_PROXY_BACKEND_URL`
 4. Use response to prefill:
    - `factoryId` -> `ExerciseCommand.contractId`
    - `choiceContext.choiceContextData` -> `extraArgs.context`
@@ -55,4 +55,4 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
 
 - Wallet interaction remains CIP-0103 dApp API.
 - Transfer factory/context discovery uses Token Standard off-ledger registry API.
-- No wallet-specific proxy/auth protocol is required for discovery.
+- dApp-side discovery auth is API-key based; upstream bearer/JWT auth can be handled by scan-proxy backend.
