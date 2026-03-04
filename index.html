@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local dApp SDK Sandbox</title>
+  </head>
+  <body>
+    <main class="app">
+      <header>
+        <h1>Canton dApp SDK Sandbox</h1>
+        <p>Quick local dApp for testing against your wallet (remote or extension provider).</p>
+      </header>
+
+      <section class="workspace">
+        <div class="left-pane">
+          <section class="card">
+            <h2>Settings</h2>
+            <label>
+              Wallet Type
+              <select id="walletType">
+                <option value="remote" selected>remote</option>
+                <option value="extension">extension</option>
+              </select>
+            </label>
+            <label>
+              Wallet Domain
+              <input id="walletDomain" type="text" placeholder="https://lat-dn.cddev.site" />
+            </label>
+            <label>
+              Devnet Registry Domain
+              <input id="devnetRegistryDomain" type="text" placeholder="https://sp-lat-dn.cddev.site" />
+            </label>
+            <label>
+              Registry / Scan API Key
+              <input id="registryApiKey" type="text" placeholder="x-api-key value" />
+            </label>
+            <label>
+              Remote RPC URL (derived; editable)
+              <input id="remoteUrl" type="text" />
+            </label>
+            <div class="row">
+              <button id="openWallet">Open Wallet UI</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Actions</h2>
+            <div class="row wrap">
+              <button id="injectProvider">Inject Provider</button>
+              <button id="connect">connect()</button>
+              <button id="status">status()</button>
+              <button id="listAccounts">listAccounts()</button>
+              <button id="getPrimaryAccount">getPrimaryAccount()</button>
+              <button id="subscribeEvents">Subscribe Events</button>
+            </div>
+
+            <label>
+              Message (for signMessage)
+              <input id="message" type="text" value="hello from local dapp" />
+            </label>
+            <div class="row">
+              <button id="signMessage">signMessage()</button>
+            </div>
+
+            <h3>Transfer Helper (prepareExecute)</h3>
+            <label>
+              Recipient Party ID
+              <input id="transferToParty" type="text" placeholder="alice::1220..." />
+            </label>
+            <label>
+              Amount
+              <input id="transferAmount" type="text" value="1.0" />
+            </label>
+            <label>
+              Registry URL (Token Standard)
+              <input id="registryUrl" type="text" placeholder="https://registry.example.com" />
+            </label>
+            <label>
+              Transfer Factory Contract ID
+              <input id="transferFactoryContractId" type="text" placeholder="00..." />
+            </label>
+            <div class="row wrap">
+              <button id="discoverTransferFactory">Resolve context</button>
+              <button id="refreshTransferFactory">Refresh context</button>
+              <label class="checkbox-inline">
+                <input id="transferFactoryManualOverride" type="checkbox" />
+                Edit manually
+              </label>
+            </div>
+            <p id="transferFactoryStatus" class="hint" data-tone="info">
+              Connect wallet, then resolve transfer context from registry.
+            </p>
+            <details id="transferAdvanced" class="advanced">
+              <summary>Advanced (optional)</summary>
+              <label>
+                Scan URL for CNS fallback (optional)
+                <input id="scanUrl" type="text" placeholder="https://scan.example.com" />
+              </label>
+              <label>
+                Registry Proxy URL (optional)
+                <input id="registryProxyUrl" type="text" placeholder="/api/registry-proxy" />
+              </label>
+              <label>
+                Instrument ID (optional; default is Amulet)
+                <input id="transferInstrumentId" type="text" placeholder="Amulet" />
+              </label>
+              <label>
+                Instrument Admin (optional)
+                <input id="transferInstrumentAdmin" type="text" placeholder="DSO::1220..." />
+              </label>
+              <label>
+                Expected Admin
+                <input id="transferExpectedAdmin" type="text" placeholder="DSO::1220..." />
+              </label>
+              <label>
+                extraArgs.context JSON (optional)
+                <textarea id="transferContextJson" rows="3">{ "values": {} }</textarea>
+              </label>
+              <label>
+                disclosedContracts JSON (optional)
+                <textarea id="transferDisclosedJson" rows="4">[]</textarea>
+              </label>
+              <label>
+                Transfer Factory Template ID
+                <input
+                  id="transferFactoryTemplateId"
+                  type="text"
+                  value="#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory"
+                />
+              </label>
+            </details>
+            <div class="row">
+              <button id="prefillTransferCommand">Prefill prepareExecute transfer</button>
+            </div>
+
+            <label>
+              PrepareExecute commands JSON
+              <textarea id="commandsJson" rows="8"></textarea>
+            </label>
+            <div class="row wrap">
+              <button id="prepareExecute">prepareExecute()</button>
+              <button id="prepareExecuteAndWait">prepareExecuteAndWait()</button>
+              <button id="ledgerVersion">ledgerApi(GET /v2/version)</button>
+            </div>
+          </section>
+        </div>
+
+        <aside class="right-pane">
+          <section class="card log-card">
+            <div class="row space-between">
+              <h2>Log</h2>
+              <button id="clearLog">Clear</button>
+            </div>
+            <pre id="log"></pre>
+          </section>
+        </aside>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
