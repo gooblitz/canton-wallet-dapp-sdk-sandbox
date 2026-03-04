@@ -99,19 +99,6 @@ type TransferChoiceContext = {
   disclosedContracts: Record<string, unknown>[];
 };
 
-type RegistryProxyRequest = {
-  endpoint: string;
-  method: 'GET' | 'POST';
-  headers?: Record<string, string>;
-  bodyText?: string;
-};
-
-type RegistryProxyResponse = {
-  status?: unknown;
-  headers?: unknown;
-  bodyText?: unknown;
-};
-
 type LedgerApiRPCResult = {
   response?: unknown;
 };
@@ -135,7 +122,6 @@ const els = {
   transferAmount: qs<HTMLInputElement>('#transferAmount'),
   registryUrl: qs<HTMLInputElement>('#registryUrl'),
   scanUrl: qs<HTMLInputElement>('#scanUrl'),
-  registryProxyUrl: qs<HTMLInputElement>('#registryProxyUrl'),
   transferInstrumentId: qs<HTMLInputElement>('#transferInstrumentId'),
   transferInstrumentAdmin: qs<HTMLInputElement>('#transferInstrumentAdmin'),
   transferFactoryContractId: qs<HTMLInputElement>('#transferFactoryContractId'),
@@ -180,7 +166,6 @@ const TRANSFER_CONTEXT_CACHE_STORAGE_KEY = 'local_dapp_transfer_context_cache_v1
 const TRANSFER_CONTEXT_CACHE_TTL_MS = 90 * 1000;
 const PLACEHOLDER_TEMPLATE_IDS = new Set(['pkg:Module:Template', '#pkg:Module:Template']);
 const ENV_REGISTRY_URLS = parseEnvRegistryUrlMap(import.meta.env.VITE_REGISTRY_URLS_JSON?.toString().trim() || '');
-const ENV_REGISTRY_PROXY_URL = import.meta.env.VITE_REGISTRY_PROXY_URL?.toString().trim() || '/api/registry-proxy';
 const ENV_WALLET_DOMAIN = normalizeDomainValue(
   import.meta.env.VITE_WALLET_DOMAIN?.toString().trim() || DEFAULT_WALLET_DOMAIN,
   DEFAULT_WALLET_DOMAIN,
@@ -247,7 +232,6 @@ const logEntries: string[] = [];
 
 els.transferFactoryTemplateId.value = els.transferFactoryTemplateId.value.trim() || TRANSFER_FACTORY_TEMPLATE_ID;
 els.scanUrl.value = ENV_SCAN_URL;
-els.registryProxyUrl.value = ENV_REGISTRY_PROXY_URL;
 if (!els.registryUrl.value.trim()) {
   const bootstrapRegistryUrl =
     ENV_SINGLE_REGISTRY_URL || ENV_REGISTRY_URLS.devnet || loadRegistryUrlStore().devnet || '';
@@ -1086,111 +1070,12 @@ function parseUrl(raw: string): URL | null {
   }
 }
 
-function getRegistryProxyUrl(): string {
-  const fromInput = els.registryProxyUrl.value.trim();
-  if (fromInput) return fromInput;
-  return ENV_REGISTRY_PROXY_URL;
-}
-
 function getRequiredRegistryAPIKey(): string {
   const key = els.registryApiKey.value.trim();
   if (!key) {
     throw new Error('Registry / scan API key is required. Set it in Settings before resolving transfer context.');
   }
   return key;
-}
-
-function extractProxyForwardHeaders(headers: Headers): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of headers.entries()) {
-    const lower = key.toLowerCase();
-    if (lower === 'accept' || lower === 'content-type' || lower === 'x-api-key') {
-      out[key] = value;
-    }
-  }
-  return out;
-}
-
-function parseProxyResponseHeaders(raw: unknown): Record<string, string> {
-  const obj = asObject(raw);
-  if (!obj) {
-    return {};
-  }
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (typeof value !== 'string') continue;
-    const normalizedKey = key.trim();
-    if (!normalizedKey) continue;
-    out[normalizedKey] = value;
-  }
-  return out;
-}
-
-async function tryProxyRegistryRequest(endpoint: string, init: RequestInit): Promise<Response | null> {
-  const proxyUrl = getRegistryProxyUrl();
-  if (!proxyUrl) {
-    return null;
-  }
-
-  const method = (init.method || 'GET').toUpperCase();
-  if (method !== 'GET' && method !== 'POST') {
-    return null;
-  }
-
-  const apiKey = getRequiredRegistryAPIKey();
-  let bodyText: string | undefined;
-  if (init.body !== undefined && init.body !== null) {
-    if (typeof init.body !== 'string') {
-      return null;
-    }
-    bodyText = init.body;
-  }
-
-  const requestHeaders = new Headers(init.headers ?? {});
-  requestHeaders.set('X-API-Key', apiKey);
-  const payload: RegistryProxyRequest = {
-    endpoint,
-    method: method as 'GET' | 'POST',
-    headers: extractProxyForwardHeaders(requestHeaders),
-    ...(bodyText !== undefined ? { bodyText } : {}),
-  };
-
-  const proxyHeaders = new Headers({
-    'Content-Type': 'application/json',
-  });
-
-  let proxyResponse: Response;
-  try {
-    proxyResponse = await fetch(proxyUrl, {
-      method: 'POST',
-      headers: proxyHeaders,
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    return null;
-  }
-
-  if (proxyResponse.status === 404 || proxyResponse.status === 405) {
-    return null;
-  }
-  if (!proxyResponse.ok) {
-    const body = await proxyResponse.text();
-    throw {
-      message: `Registry proxy request failed: HTTP ${proxyResponse.status}`,
-      code: proxyResponse.status,
-      data: body,
-    } satisfies ErrorLike;
-  }
-
-  const wrapped = (await proxyResponse.json()) as RegistryProxyResponse;
-  const status = typeof wrapped.status === 'number' ? wrapped.status : 502;
-  const headers = parseProxyResponseHeaders(wrapped.headers);
-  const wrappedBodyText = typeof wrapped.bodyText === 'string' ? wrapped.bodyText : stringify(wrapped.bodyText ?? '');
-
-  return new Response(wrappedBodyText, {
-    status,
-    headers,
-  });
 }
 
 async function fetchWithAPIKey(endpoint: string, init: RequestInit): Promise<Response> {
@@ -1204,10 +1089,6 @@ async function fetchWithAPIKey(endpoint: string, init: RequestInit): Promise<Res
 }
 
 async function fetchForRegistryDiscovery(endpoint: string, init: RequestInit): Promise<Response> {
-  const proxied = await tryProxyRegistryRequest(endpoint, init);
-  if (proxied) {
-    return proxied;
-  }
   return fetchWithAPIKey(endpoint, init);
 }
 
@@ -1383,7 +1264,7 @@ async function fetchRegistryAdminId(registryUrl: string): Promise<string> {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network/CORS layer. Configure Registry Proxy URL (default /api/registry-proxy), check REGISTRY_PROXY_ALLOWED_HOSTS, or use a registry endpoint that is directly browser-accessible.',
+        'Registry fetch failed at network/CORS layer. Ensure the registry endpoint is browser-accessible and allows your dApp origin (CORS).',
       );
     }
     throw err;
@@ -1426,7 +1307,7 @@ async function fetchTransferContextFromRegistry(
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        'Registry fetch failed at network/CORS layer. Configure Registry Proxy URL (default /api/registry-proxy), check REGISTRY_PROXY_ALLOWED_HOSTS, and ensure your API key is valid.',
+        'Registry fetch failed at network/CORS layer. Ensure the registry endpoint is browser-accessible (CORS) and your API key is valid.',
       );
     }
     throw err;

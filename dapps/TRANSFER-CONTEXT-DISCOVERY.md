@@ -20,12 +20,10 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
    - instrument id/admin
    - expected admin
 2. Resolve registry URL.
-3. Query Token Standard off-ledger API (proxy-first) at:
+3. Query Token Standard off-ledger API directly:
    - `POST {registryUrl}/registry/transfer-instruction/v1/transfer-factory`
-   - dApp first tries `POST {registryProxyUrl}` with `{ endpoint, method, headers, bodyText }`
-   - forwarded headers are restricted to safe values (`accept`, `content-type`, `x-api-key`)
-   - proxy forwards to target endpoint and returns `{ status, headers, bodyText }`
-   - if proxy is unavailable, dApp falls back to direct browser fetch
+   - send `X-API-Key` from dApp settings
+   - endpoint must allow dApp origin via CORS
 4. Use response to prefill:
    - `factoryId` -> `ExerciseCommand.contractId`
    - `choiceContext.choiceContextData` -> `extraArgs.context`
@@ -57,4 +55,4 @@ Use a wallet-agnostic transfer prefill flow without relying on party ACS visibil
 
 - Wallet interaction remains CIP-0103 dApp API.
 - Transfer factory/context discovery uses Token Standard off-ledger registry API.
-- Registry proxy is deployment plumbing (not a CIP method); it is used to bridge CORS and enforce destination host/path policy.
+- No wallet-specific proxy/auth protocol is required for discovery.

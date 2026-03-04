@@ -32,15 +32,12 @@ Optional dApp env for registry discovery:
 VITE_REGISTRY_URLS_JSON='{"devnet":"https://registry.devnet.example.com","mainnet":"https://registry.mainnet.example.com"}'
 VITE_TOKEN_REGISTRY_URL='https://registry.devnet.example.com' # fallback for devnet
 VITE_SCAN_URL='https://scan.devnet.example.com'               # optional CNS fallback
-VITE_REGISTRY_PROXY_URL='/api/registry-proxy'                 # proxy endpoint used by this app
-REGISTRY_PROXY_ALLOWED_HOSTS='wallet.localhost,localhost,127.0.0.1,sp-lat-dn.cddev.site'
-# REGISTRY_PROXY_TIMEOUT_MS='15000'                           # optional
 ```
 
 ## Run
 
 ```bash
-cd experiments/typescript/local-dapp-sdk
+cd canton-wallet-dapp-sdk-sandbox
 npm install
 npm run dev
 ```
@@ -57,7 +54,6 @@ Open: `http://127.0.0.1:4174`
 5. To prefill a transfer command for `prepareExecute`:
    - Fill recipient and amount.
    - Set `Registry URL` (or let the app resolve it from network config/CNS fallback).
-   - Keep `Registry Proxy URL` as `/api/registry-proxy` for CORS-restricted scan-proxy/registry deployments.
    - Set `Expected Admin` (or `Instrument Admin`) under `Advanced (optional)`.
    - Click `Resolve context` (or use `Refresh context`) to query:
      - `POST /registry/transfer-instruction/v1/transfer-factory`
@@ -88,16 +84,15 @@ Open: `http://127.0.0.1:4174`
   - `VITE_TOKEN_REGISTRY_URL=https://sp-lat-dn.cddev.site/v0/scan-proxy`
   - `VITE_SCAN_URL=https://sp-lat-dn.cddev.site/v0/scan-proxy`
 - ACS/`/v2/state/active-contracts` factory discovery has been removed from this dApp.
-- Discovery calls are proxy-first (`/api/registry-proxy`) then fall back to direct browser fetch.
-- `/api/registry-proxy` is implemented by this Vite dev server (`vite.config.ts`). For non-dev deployments, expose the same endpoint contract in your dApp backend.
-- Registry discovery uses `X-API-Key` + allowlisted domains (no bearer-token forwarding/minting in the proxy).
+- Registry discovery uses direct browser fetch with `X-API-Key` (no proxy).
+- Registry/scan endpoints must allow your dApp origin via CORS.
 - The app auto-normalizes `TransferFactory` template IDs before submit (adds `#` for package-name IDs).
 - In `remote` mode, this sandbox uses direct JSON-RPC for `getPrimaryAccount`, `signMessage`, and `prepareExecuteAndWait` so testing is not blocked by SDK remote-provider method coverage.
 
 ## Troubleshooting
 
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
-  - Verify `Registry / Scan API Key` in the UI and ensure the target domain is in `REGISTRY_PROXY_ALLOWED_HOSTS`.
+  - Verify `Registry / Scan API Key` in the UI.
   - Restart `npm run dev` after env changes.
 - `TEMPLATES_OR_INTERFACES_NOT_FOUND` with `pkg:Module:Template`
   - `commands JSON` still has the placeholder command.
