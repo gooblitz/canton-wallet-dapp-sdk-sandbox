@@ -1,6 +1,7 @@
 import {
   connect,
-  injectProvider,
+  disconnect,
+  ExtensionAdapter,
   ledgerApi,
   listAccounts,
   onAccountsChanged,
@@ -9,6 +10,7 @@ import {
   open,
   prepareExecute,
   prepareExecuteAndWait,
+  RemoteAdapter,
   status,
 } from '@canton-network/dapp-sdk';
 import './styles.css';
@@ -19,18 +21,25 @@ type RequestingProvider = {
   removeListener<T>(event: string, listener: (event: T) => void): RequestingProvider;
 };
 
+type SDKStatusSnapshot = Awaited<ReturnType<typeof status>>;
+type SDKPrepareExecuteParams = Parameters<typeof prepareExecute>[0];
+type SDKPrepareExecuteInput = SDKPrepareExecuteParams & {
+  estimateTrafficCost?: Record<string, unknown>;
+};
+
 type ErrorLike = {
   message?: string;
   code?: number;
   data?: unknown;
   cause?: unknown;
+  error?: number;
+  details?: unknown;
+  status?: string;
 };
 
-type KernelSession = {
-  session?: {
-    accessToken?: string;
-  };
-  accessToken?: string;
+type KernelDiscoveryState = {
+  walletType?: string;
+  url?: string;
 };
 
 type JSONRPCErrorPayload = {
@@ -114,7 +123,6 @@ function qs<T extends HTMLElement>(selector: string): T {
 }
 
 const els = {
-  walletType: qs<HTMLSelectElement>('#walletType'),
   walletDomain: qs<HTMLInputElement>('#walletDomain'),
   devnetRegistryDomain: qs<HTMLInputElement>('#devnetRegistryDomain'),
   registryApiKey: qs<HTMLInputElement>('#registryApiKey'),
@@ -136,9 +144,9 @@ const els = {
   transferDisclosedJson: qs<HTMLTextAreaElement>('#transferDisclosedJson'),
   commandsJson: qs<HTMLTextAreaElement>('#commandsJson'),
   log: qs<HTMLPreElement>('#log'),
-  injectProvider: qs<HTMLButtonElement>('#injectProvider'),
   openWallet: qs<HTMLButtonElement>('#openWallet'),
   connect: qs<HTMLButtonElement>('#connect'),
+  disconnect: qs<HTMLButtonElement>('#disconnect'),
   status: qs<HTMLButtonElement>('#status'),
   listAccounts: qs<HTMLButtonElement>('#listAccounts'),
   getPrimaryAccount: qs<HTMLButtonElement>('#getPrimaryAccount'),
@@ -220,22 +228,19 @@ els.transferContextJson.value = '{ "values": {} }';
 els.transferDisclosedJson.value = '[]';
 els.transferFactoryContractId.readOnly = true;
 
-let provider: RequestingProvider | null = null;
 let eventsSubscribed = false;
 const KERNEL_DISCOVERY_KEY = 'splice_wallet_kernel_discovery';
 const KERNEL_SESSION_KEY = 'splice_wallet_kernel_session';
-const TX_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
+const DISCOVERY_SESSION_STORAGE_KEY = 'splice_discovery_client_session';
 const SIGN_MESSAGE_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 const SIGN_MESSAGE_POLL_INTERVAL_MS = 1200;
-const CONNECT_WAIT_TIMEOUT_MS = 60 * 1000;
-const CONNECT_TIMEOUT_MESSAGE = 'Connect is waiting for wallet approval. Complete the popup and retry.';
+const TX_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 const TRANSFER_FACTORY_TEMPLATE_ID =
   '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory';
 const HOLDING_TEMPLATE_ID = 'Splice.Amulet:Amulet';
 const MOBILE_LAYOUT_MEDIA_QUERY = '(max-width: 860px)';
 const MAX_LOG_ENTRIES = 400;
 
-let remoteConnectInFlight: Promise<void> | null = null;
 const logEntries: string[] = [];
 
 els.transferFactoryTemplateId.value = els.transferFactoryTemplateId.value.trim() || TRANSFER_FACTORY_TEMPLATE_ID;
@@ -296,20 +301,34 @@ function stringify(value: unknown): string {
 function normalizeError(err: unknown): { message: string; details: Record<string, unknown> } {
   if (err && typeof err === 'object') {
     const e = err as ErrorLike;
-    const message = e.message || 'Unknown error';
     const details: Record<string, unknown> = {};
 
     if (typeof e.code === 'number') {
       details.code = e.code;
     }
+    if (typeof e.error === 'number') {
+      details.error = e.error;
+    }
+    if (typeof e.status === 'string' && e.status) {
+      details.status = e.status;
+    }
     if (e.data !== undefined) {
       details.data = e.data;
+    }
+    if (e.details !== undefined) {
+      details.details = e.details;
     }
     if (e.cause !== undefined) {
       details.cause = e.cause;
     }
 
-    return { message, details };
+    return {
+      message:
+        (typeof e.message === 'string' && e.message)
+        || (typeof e.details === 'string' && e.details)
+        || 'Unknown error',
+      details,
+    };
   }
 
   return {
@@ -598,55 +617,6 @@ function maybeOpenUserUrl(err: unknown): void {
   }
 }
 
-function isMissingOpenSessionError(err: unknown): boolean {
-  const message = normalizeError(err).message;
-  return (
-    message.includes('No previous discovery found') ||
-    message.includes('No previous session found') ||
-    message.includes('User URL not found in session')
-  );
-}
-
-async function fetchRemoteConnectUserUrl(): Promise<string> {
-  const url = els.remoteUrl.value.trim();
-  if (!url) {
-    throw new Error('Remote URL is required');
-  }
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: crypto.randomUUID(),
-      method: 'connect',
-    }),
-  });
-  if (!response.ok) {
-    throw new Error(`connect probe failed: HTTP ${response.status}`);
-  }
-
-  const payload = (await response.json()) as JSONRPCResponsePayload<Record<string, unknown>>;
-  if (payload.result) {
-    const result = asObject(payload.result);
-    const userUrl = asString(result?.userUrl);
-    if (userUrl) {
-      return userUrl;
-    }
-  }
-  if (payload.error?.data) {
-    const errorData = asObject(payload.error.data);
-    const userUrl = asString(errorData?.userUrl);
-    if (userUrl) {
-      return userUrl;
-    }
-  }
-
-  throw new Error('Remote connect did not return a userUrl');
-}
-
 async function run(action: string, fn: () => Promise<unknown>): Promise<void> {
   appendLog('INFO', `${action} -> started`);
   try {
@@ -659,197 +629,95 @@ async function run(action: string, fn: () => Promise<unknown>): Promise<void> {
   }
 }
 
+function getInjectedProvider(): RequestingProvider | null {
+  return (window as Window & { canton?: RequestingProvider }).canton ?? null;
+}
+
 function ensureProvider(): RequestingProvider {
+  const provider = getInjectedProvider();
   if (!provider) {
-    throw new Error('Provider not injected. Click "Inject Provider" first.');
+    throw new Error('No active wallet provider. Click connect() to open the wallet picker first.');
   }
   return provider;
 }
 
-function resetSDKProviderState(): void {
+function loadKernelDiscoveryState(): KernelDiscoveryState | null {
+  const raw = localStorage.getItem(KERNEL_DISCOVERY_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return asObject(parsed) as KernelDiscoveryState;
+  } catch {
+    return null;
+  }
+}
+
+function clearPersistedWalletSessionState(): void {
   localStorage.removeItem(KERNEL_DISCOVERY_KEY);
   localStorage.removeItem(KERNEL_SESSION_KEY);
-  try {
-    delete (window as Window & { canton?: unknown }).canton;
-  } catch {
-    // ignore
-  }
+  localStorage.removeItem(DISCOVERY_SESSION_STORAGE_KEY);
+  (window as Window & { canton?: RequestingProvider }).canton = undefined;
 }
 
-function getKernelSessionAccessToken(): string | null {
-  const raw = localStorage.getItem(KERNEL_SESSION_KEY);
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as KernelSession;
-    if (typeof parsed.session?.accessToken === 'string' && parsed.session.accessToken.length > 0) {
-      return parsed.session.accessToken;
-    }
-    if (typeof parsed.accessToken === 'string' && parsed.accessToken.length > 0) {
-      return parsed.accessToken;
-    }
-  } catch {
-    // Ignore malformed session cache.
+function getCurrentProviderKind(): 'remote' | 'extension' | 'unknown' {
+  const discovery = loadKernelDiscoveryState();
+  if (discovery?.walletType === 'remote') {
+    return 'remote';
   }
-
-  return null;
+  if (discovery?.walletType === 'extension') {
+    return 'extension';
+  }
+  return 'unknown';
 }
 
-function persistKernelSessionAccessToken(accessToken: string): void {
-  if (!accessToken) return;
-
-  const raw = localStorage.getItem(KERNEL_SESSION_KEY);
-  let existing: Record<string, unknown> = {};
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as unknown;
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        existing = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // ignore malformed cache and overwrite below
-    }
+function buildPickerConnectOptions(): {
+  defaultAdapters: ExtensionAdapter[];
+  additionalAdapters?: RemoteAdapter[];
+} {
+  const defaultAdapters = [new ExtensionAdapter()];
+  const preferredGatewayUrl = els.remoteUrl.value.trim();
+  if (!preferredGatewayUrl) {
+    return { defaultAdapters };
   }
 
-  const session =
-    existing.session && typeof existing.session === 'object' && !Array.isArray(existing.session)
-      ? (existing.session as Record<string, unknown>)
-      : {};
+  const parsedPreferredGatewayUrl = parseUrl(preferredGatewayUrl);
+  if (!parsedPreferredGatewayUrl) {
+    throw new Error('Preferred wallet gateway URL must be an absolute URL.');
+  }
 
-  const next: Record<string, unknown> = {
-    ...existing,
-    accessToken,
-    session: {
-      ...session,
-      accessToken,
-    },
+  return {
+    defaultAdapters,
+    additionalAdapters: [
+      new RemoteAdapter({
+        name: `Configured Gateway (${parsedPreferredGatewayUrl.host})`,
+        rpcUrl: parsedPreferredGatewayUrl.toString(),
+      }),
+    ],
   };
-  localStorage.setItem(KERNEL_SESSION_KEY, JSON.stringify(next));
 }
 
-function extractAccessToken(candidate: unknown): string | null {
-  if (!candidate || typeof candidate !== 'object') return null;
-  const obj = candidate as Record<string, unknown>;
-  const direct = obj.accessToken;
-  if (typeof direct === 'string' && direct.length > 0) return direct;
-
-  const session = obj.session;
-  if (session && typeof session === 'object' && !Array.isArray(session)) {
-    const nested = (session as Record<string, unknown>).accessToken;
-    if (typeof nested === 'string' && nested.length > 0) return nested;
+async function getCurrentRemoteGatewayContext(): Promise<{ rpcUrl: string; accessToken: string }> {
+  const discovery = loadKernelDiscoveryState();
+  const rpcUrl = discovery?.walletType === 'remote' ? asString(discovery.url) : '';
+  if (!rpcUrl) {
+    throw new Error('Active wallet is not a remote gateway. Choose a remote gateway in connect().');
   }
 
-  return null;
-}
-
-async function syncSessionFromSDKStatus(): Promise<string | null> {
-  try {
-    const result = await status();
-    const token = extractAccessToken(result);
-    if (token) {
-      persistKernelSessionAccessToken(token);
-      return token;
-    }
-  } catch {
-    // ignore and fall through
+  const statusResult = await getSDKStatus();
+  const accessToken = asString(statusResult?.session?.accessToken);
+  if (!accessToken) {
+    throw new Error('Connected remote session is missing accessToken. Reconnect via connect().');
   }
-  return null;
+
+  return { rpcUrl, accessToken };
 }
 
 async function rpcRequest<T>(method: string, params?: Record<string, unknown> | unknown[]): Promise<T> {
-  return rpcRequestWithReconnect<T>(method, params, false);
-}
-
-async function ensureRemoteSession(forceRefresh = false): Promise<string> {
-  if (forceRefresh) {
-    localStorage.removeItem(KERNEL_SESSION_KEY);
-    remoteConnectInFlight = null;
-  }
-
-  if (!forceRefresh) {
-    const existing = getKernelSessionAccessToken();
-    if (existing) {
-      return existing;
-    }
-
-    // SDK may hold token in memory while local cache is empty/stale.
-    const statusToken = await syncSessionFromSDKStatus();
-    if (statusToken) {
-      return statusToken;
-    }
-  }
-
-  const url = els.remoteUrl.value.trim();
-  if (!url) {
-    throw new Error('Remote URL is required');
-  }
-
-  // Ensure provider is injected before attempting connect.
-  ensureProvider();
-
-  if (!remoteConnectInFlight) {
-    remoteConnectInFlight = connect({
-      defaultGateways: [],
-      additionalGateways: [
-        {
-          name: 'Local Canton Wallet',
-          rpcUrl: url,
-        },
-      ],
-    })
-      .then((result) => {
-        const token = extractAccessToken(result);
-        if (token) {
-          persistKernelSessionAccessToken(token);
-        }
-      })
-      .finally(() => {
-        remoteConnectInFlight = null;
-      });
-  }
-
-  try {
-    await Promise.race([
-      remoteConnectInFlight,
-      sleep(CONNECT_WAIT_TIMEOUT_MS).then(() => {
-        throw new Error(CONNECT_TIMEOUT_MESSAGE);
-      }),
-    ]);
-  } catch (err) {
-    // Allow user to start a fresh connect attempt after timeout.
-    if (err instanceof Error && err.message === CONNECT_TIMEOUT_MESSAGE) {
-      remoteConnectInFlight = null;
-    }
-    throw err;
-  }
-
-  const refreshed = getKernelSessionAccessToken() ?? (await syncSessionFromSDKStatus());
-  if (!refreshed) {
-    throw new Error('Connected, but no session token is available yet. Complete wallet auth and retry.');
-  }
-
-  return refreshed;
-}
-
-async function rpcRequestWithReconnect<T>(
-  method: string,
-  params?: Record<string, unknown> | unknown[],
-  retriedAfterReconnect = false,
-): Promise<T> {
-  const url = els.remoteUrl.value.trim();
-  if (!url) {
-    throw new Error('Remote URL is required');
-  }
-
-  const token = getKernelSessionAccessToken();
-  if (!token) {
-    throw new Error('Not connected. Click connect() and complete wallet approval first.');
-  }
-  const headers: Record<string, string> = {
+  const { rpcUrl, accessToken } = await getCurrentRemoteGatewayContext();
+  const headers = new Headers({
     'Content-Type': 'application/json',
-  };
-  headers.Authorization = `Bearer ${token}`;
-
+    Authorization: `Bearer ${accessToken}`,
+  });
   const requestBody: Record<string, unknown> = {
     jsonrpc: '2.0',
     id: crypto.randomUUID(),
@@ -859,12 +727,11 @@ async function rpcRequestWithReconnect<T>(
     requestBody.params = params;
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(rpcUrl, {
     method: 'POST',
     headers,
     body: JSON.stringify(requestBody),
   });
-
   if (!response.ok) {
     const body = await response.text();
     throw {
@@ -876,7 +743,7 @@ async function rpcRequestWithReconnect<T>(
 
   const payload = (await response.json()) as JSONRPCResponsePayload<T>;
   if (payload.error) {
-    if (payload.error.code === 4100 && !retriedAfterReconnect) {
+    if (payload.error.code === 4100) {
       throw new Error('Session expired or unauthorized. Click connect() to re-authenticate.');
     }
     throw {
@@ -892,6 +759,18 @@ async function rpcRequestWithReconnect<T>(
   return payload.result as T;
 }
 
+async function getSDKStatus(): Promise<SDKStatusSnapshot | null> {
+  try {
+    return await status();
+  } catch {
+    return null;
+  }
+}
+
+function getNetworkIdFromStatusSnapshot(statusResult: SDKStatusSnapshot | null): string | null {
+  return asString(statusResult?.network?.networkId);
+}
+
 function parseCommandParamsInput(): Record<string, unknown> {
   const parsed = JSON.parse(els.commandsJson.value) as unknown;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -905,6 +784,61 @@ function parseCommandParamsInput(): Record<string, unknown> {
     );
   }
   return out;
+}
+
+function toPrepareExecuteParams(params: Record<string, unknown>): SDKPrepareExecuteInput {
+  const commandsRaw = Array.isArray(params.commands) ? params.commands : [];
+  if (commandsRaw.length === 0) {
+    throw new Error('commands JSON must contain a non-empty commands array');
+  }
+
+  const commands = commandsRaw.map((command) => asObject(command) ?? {}) as unknown as SDKPrepareExecuteParams['commands'];
+  const prepared: SDKPrepareExecuteInput = { commands };
+
+  const commandId = asString(params.commandId);
+  if (commandId) {
+    prepared.commandId = commandId;
+  }
+
+  const actAsValues = Array.isArray(params.actAs) ? params.actAs.map((value) => asString(value)) : [];
+  const actAs = uniqueStrings(actAsValues);
+  if (actAs.length > 0) {
+    prepared.actAs = actAs;
+  }
+
+  const readAsValues = Array.isArray(params.readAs) ? params.readAs.map((value) => asString(value)) : [];
+  const readAs = uniqueStrings(readAsValues);
+  if (readAs.length > 0) {
+    prepared.readAs = readAs;
+  }
+
+  const disclosedContractsRaw = Array.isArray(params.disclosedContracts) ? params.disclosedContracts : [];
+  const disclosedContracts = disclosedContractsRaw
+    .map((entry) => asObject(entry))
+    .filter((entry): entry is Record<string, unknown> => entry !== null);
+  if (disclosedContracts.length > 0) {
+    prepared.disclosedContracts = disclosedContracts as unknown as NonNullable<SDKPrepareExecuteParams['disclosedContracts']>;
+  }
+
+  const synchronizerId = asString(params.synchronizerId);
+  if (synchronizerId) {
+    prepared.synchronizerId = synchronizerId;
+  }
+
+  const packageIdSelectionPreferenceValues = Array.isArray(params.packageIdSelectionPreference)
+    ? params.packageIdSelectionPreference.map((value) => asString(value))
+    : [];
+  const packageIdSelectionPreference = uniqueStrings(packageIdSelectionPreferenceValues);
+  if (packageIdSelectionPreference.length > 0) {
+    prepared.packageIdSelectionPreference = packageIdSelectionPreference;
+  }
+
+  const estimateTrafficCost = asObject(params.estimateTrafficCost);
+  if (estimateTrafficCost) {
+    prepared.estimateTrafficCost = estimateTrafficCost;
+  }
+
+  return prepared;
 }
 
 function findPlaceholderTemplateId(value: unknown): string | null {
@@ -954,15 +888,6 @@ async function dappLedgerApiJSON(
   resource: string,
   body?: Record<string, unknown>,
 ): Promise<unknown> {
-  if (els.walletType.value === 'remote') {
-    const result = await rpcRequest<LedgerApiRPCResult>('ledgerApi', {
-      requestMethod,
-      resource,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
-    return parseLedgerApiJSONResponse(result);
-  }
-
   const result = await p.request<LedgerApiRPCResult>({
     method: 'ledgerApi',
     params: {
@@ -1046,12 +971,22 @@ async function getPrimaryHoldingContractIds(p: RequestingProvider, ownerPartyId:
 }
 
 async function getActiveNetworkId(p: RequestingProvider): Promise<string> {
-  let network: NetworkInfo | null = null;
-  if (els.walletType.value === 'remote') {
-    network = await rpcRequest<NetworkInfo>('getActiveNetwork');
-  } else {
-    network = await p.request<NetworkInfo>({ method: 'getActiveNetwork' });
+  const statusResult = await getSDKStatus();
+  const networkIdFromStatus = getNetworkIdFromStatusSnapshot(statusResult);
+  if (networkIdFromStatus) {
+    return networkIdFromStatus;
   }
+
+  if (getCurrentProviderKind() === 'remote') {
+    const remoteStatusResult = await rpcRequest<SDKStatusSnapshot>('status');
+    const remoteNetworkId = getNetworkIdFromStatusSnapshot(remoteStatusResult);
+    if (!remoteNetworkId) {
+      throw new Error('Could not resolve networkId from remote gateway status');
+    }
+    return remoteNetworkId;
+  }
+
+  const network = await p.request<NetworkInfo>({ method: 'getActiveNetwork' });
   const networkId = asString(network?.networkId);
   if (!networkId) {
     throw new Error('Could not resolve networkId from getActiveNetwork');
@@ -1578,11 +1513,7 @@ function parseTransferHelperInput(): TransferHelperInput {
 }
 
 async function getPrimaryAccountPartyId(p: RequestingProvider): Promise<string> {
-  const account =
-    els.walletType.value === 'remote'
-      ? await rpcRequest<Record<string, unknown>>('getPrimaryAccount')
-      : await p.request<Record<string, unknown>>({ method: 'getPrimaryAccount' });
-
+  const account = await p.request<Record<string, unknown>>({ method: 'getPrimaryAccount' });
   const partyId = typeof account.partyId === 'string' ? account.partyId.trim() : '';
   if (!partyId) {
     throw new Error('Could not resolve partyId from getPrimaryAccount');
@@ -1777,36 +1708,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-async function signMessageRemoteWithApproval(message: string): Promise<Record<string, unknown>> {
-  try {
-    return await rpcRequest<Record<string, unknown>>('signMessage', { message });
-  } catch (initialErr) {
-    const first = initialErr as ErrorLike;
-    const firstPending = parsePendingApprovalData(first.data);
-    const isPendingApproval = first.code === -32002 && firstPending.status === 'pending';
-    if (!isPendingApproval || !firstPending.userUrl) {
-      throw initialErr;
-    }
-
-    openUserUrl(firstPending.userUrl);
-    const deadline = Date.now() + SIGN_MESSAGE_WAIT_TIMEOUT_MS;
-
-    while (Date.now() < deadline) {
-      await sleep(SIGN_MESSAGE_POLL_INTERVAL_MS);
-      try {
-        return await rpcRequest<Record<string, unknown>>('signMessage', { message });
-      } catch (pollErr) {
-        const poll = pollErr as ErrorLike;
-        const pollPending = parsePendingApprovalData(poll.data);
-        if (poll.code === -32002 && pollPending.status === 'pending') {
-          continue;
-        }
-        throw pollErr;
-      }
-    }
-
-    throw new Error('Timed out waiting for signMessage approval');
+function ensureCommandId(params: Record<string, unknown>): string {
+  const existingCommandId = asString(params.commandId);
+  if (existingCommandId) {
+    return existingCommandId;
   }
+
+  const generatedCommandId = crypto.randomUUID();
+  params.commandId = generatedCommandId;
+  els.commandsJson.value = JSON.stringify(params, null, 2);
+  return generatedCommandId;
 }
 
 function waitForTxResult(
@@ -1863,58 +1774,93 @@ function waitForTxResult(
   return { promise, cleanup };
 }
 
+async function prepareExecuteAndWaitRemote(
+  p: RequestingProvider,
+  params: Record<string, unknown>,
+): Promise<{ tx: TxChangedEvent }> {
+  const commandId = ensureCommandId(params);
+  const waiter = waitForTxResult(p, commandId);
+
+  try {
+    await prepareExecute(toPrepareExecuteParams(params));
+    return await waiter.promise;
+  } catch (err) {
+    waiter.cleanup();
+    throw err;
+  }
+}
+
+async function signMessageRemoteWithApproval(message: string): Promise<Record<string, unknown>> {
+  // SDK 0.23 still does not proxy remote signMessage, so bridge directly to the selected wallet gateway.
+  try {
+    return await rpcRequest<Record<string, unknown>>('signMessage', { message });
+  } catch (initialErr) {
+    const first = initialErr as ErrorLike;
+    const firstPending = parsePendingApprovalData(first.data);
+    const isPendingApproval = first.code === -32002 && firstPending.status === 'pending';
+    if (!isPendingApproval || !firstPending.userUrl) {
+      throw initialErr;
+    }
+
+    openUserUrl(firstPending.userUrl);
+    const deadline = Date.now() + SIGN_MESSAGE_WAIT_TIMEOUT_MS;
+
+    while (Date.now() < deadline) {
+      await sleep(SIGN_MESSAGE_POLL_INTERVAL_MS);
+      try {
+        return await rpcRequest<Record<string, unknown>>('signMessage', { message });
+      } catch (pollErr) {
+        const poll = pollErr as ErrorLike;
+        const pollPending = parsePendingApprovalData(poll.data);
+        if (poll.code === -32002 && pollPending.status === 'pending') {
+          continue;
+        }
+        throw pollErr;
+      }
+    }
+
+    throw new Error('Timed out waiting for signMessage approval');
+  }
+}
+
 els.walletDomain.addEventListener('change', applyDomainSettingsFromInputs);
 els.devnetRegistryDomain.addEventListener('change', applyDomainSettingsFromInputs);
 
-els.injectProvider.addEventListener('click', () => {
-  const walletType = els.walletType.value;
-  if (walletType === 'remote') {
-    const url = els.remoteUrl.value.trim();
-    if (!url) {
-      appendLog('ERR', 'injectProvider -> remote URL is required');
-      return;
-    }
-    // Force SDK to use the selected remote URL, not any stale injected provider/session.
-    resetSDKProviderState();
-    provider = injectProvider({ walletType: 'remote', url }) as RequestingProvider;
-    resetTransferFactoryDiscoveryUI();
-    appendLog('OK', 'injectProvider(remote) -> success', { url });
-    return;
-  }
-
-  provider = injectProvider({ walletType: 'extension' }) as RequestingProvider;
-  resetTransferFactoryDiscoveryUI();
-  appendLog('OK', 'injectProvider(extension) -> success');
-});
-
 els.openWallet.addEventListener('click', () => {
   void run('open', async () => {
-    try {
-      await open();
-      return { opened: true, via: 'sdk-open' };
-    } catch (err) {
-      if (els.walletType.value !== 'remote' || !isMissingOpenSessionError(err)) {
-        throw err;
-      }
-      const userUrl = await fetchRemoteConnectUserUrl();
-      openUserUrl(userUrl);
-      return { opened: true, via: 'remote-connect-userUrl', userUrl };
-    }
+    ensureProvider();
+    await open();
+    return { opened: true, via: 'sdk-open' };
   });
 });
 
 els.connect.addEventListener('click', () => {
   void run('connect', async () => {
-    const p = ensureProvider();
-    let result: unknown;
-    if (els.walletType.value === 'remote') {
-      await ensureRemoteSession(false);
-      result = await rpcRequest<Record<string, unknown>>('status');
-    } else {
-      result = await connect();
+    if (getCurrentProviderKind() === 'remote') {
+      (window as Window & { canton?: RequestingProvider }).canton = undefined;
     }
+    const result = await connect(buildPickerConnectOptions());
+    const p = ensureProvider();
+    eventsSubscribed = false;
+    resetTransferFactoryDiscoveryUI();
     await tryAutoConfigureRegistryUrl(p);
-    return result;
+    return {
+      ...(asObject(result) ?? {}),
+      picker: true,
+      preferredGateway: els.remoteUrl.value.trim() || undefined,
+    };
+  });
+});
+
+els.disconnect.addEventListener('click', () => {
+  void run('disconnect', async () => {
+    try {
+      return await disconnect();
+    } finally {
+      clearPersistedWalletSessionState();
+      eventsSubscribed = false;
+      resetTransferFactoryDiscoveryUI();
+    }
   });
 });
 
@@ -1934,22 +1880,18 @@ els.listAccounts.addEventListener('click', () => {
 
 els.getPrimaryAccount.addEventListener('click', () => {
   void run('getPrimaryAccount', async () => {
-    ensureProvider();
-    if (els.walletType.value === 'remote') {
-      return rpcRequest<Record<string, unknown>>('getPrimaryAccount');
-    }
     return ensureProvider().request({ method: 'getPrimaryAccount' });
   });
 });
 
 els.signMessage.addEventListener('click', () => {
   void run('signMessage', async () => {
-    ensureProvider();
+    const provider = ensureProvider();
     const message = els.message.value;
-    if (els.walletType.value === 'remote') {
+    if (getCurrentProviderKind() === 'remote') {
       return signMessageRemoteWithApproval(message);
     }
-    return ensureProvider().request({
+    return provider.request({
       method: 'signMessage',
       params: { message },
     });
@@ -2021,69 +1963,35 @@ els.prepareExecute.addEventListener('click', () => {
     const params = parseCommandParamsInput();
     normalizeTransferFactoryTemplateInParams(params);
     await ensureTransferFactoryInputHoldingCids(p, params);
-    if (els.walletType.value === 'remote') {
-      try {
-        const result = await rpcRequest<{ userUrl?: string }>('prepareExecute', params);
-        if (typeof result?.userUrl === 'string' && result.userUrl.length > 0) {
-          openUserUrl(result.userUrl);
-        }
-        return result;
-      } catch (err) {
-        const refreshed = await maybeRefreshTransferFactoryAfterFailure(p, params, err);
-        if (!refreshed) throw err;
-        const result = await rpcRequest<{ userUrl?: string }>('prepareExecute', params);
-        if (typeof result?.userUrl === 'string' && result.userUrl.length > 0) {
-          openUserUrl(result.userUrl);
-        }
-        return result;
-      }
+    try {
+      return await prepareExecute(toPrepareExecuteParams(params));
+    } catch (err) {
+      const refreshed = await maybeRefreshTransferFactoryAfterFailure(p, params, err);
+      if (!refreshed) throw err;
+      return prepareExecute(toPrepareExecuteParams(params));
     }
-
-    const parsed = params as { commands: unknown };
-    return prepareExecute({
-      commands: parsed.commands as Record<string, unknown>,
-    });
   });
 });
 
 els.prepareExecuteAndWait.addEventListener('click', () => {
   void run('prepareExecuteAndWait', async () => {
     const p = ensureProvider();
-    if (els.walletType.value === 'remote') {
-      const params = parseCommandParamsInput();
-      normalizeTransferFactoryTemplateInParams(params);
-      await ensureTransferFactoryInputHoldingCids(p, params);
-      const commandIdRaw = params.commandId;
-      const commandId =
-        typeof commandIdRaw === 'string' && commandIdRaw.trim().length > 0 ? commandIdRaw : crypto.randomUUID();
-      params.commandId = commandId;
-
-      const waiter = waitForTxResult(p, commandId);
-      try {
-        let result: { userUrl?: string };
-        try {
-          result = await rpcRequest<{ userUrl?: string }>('prepareExecute', params);
-        } catch (err) {
-          const refreshed = await maybeRefreshTransferFactoryAfterFailure(p, params, err);
-          if (!refreshed) throw err;
-          result = await rpcRequest<{ userUrl?: string }>('prepareExecute', params);
-        }
-        if (typeof result?.userUrl === 'string' && result.userUrl.length > 0) {
-          openUserUrl(result.userUrl);
-        }
-        return await waiter.promise;
-      } catch (err) {
-        waiter.cleanup();
-        throw err;
+    const params = parseCommandParamsInput();
+    normalizeTransferFactoryTemplateInParams(params);
+    await ensureTransferFactoryInputHoldingCids(p, params);
+    try {
+      if (getCurrentProviderKind() === 'remote') {
+        return await prepareExecuteAndWaitRemote(p, params);
       }
+      return await prepareExecuteAndWait(toPrepareExecuteParams(params));
+    } catch (err) {
+      const refreshed = await maybeRefreshTransferFactoryAfterFailure(p, params, err);
+      if (!refreshed) throw err;
+      if (getCurrentProviderKind() === 'remote') {
+        return prepareExecuteAndWaitRemote(p, params);
+      }
+      return prepareExecuteAndWait(toPrepareExecuteParams(params));
     }
-
-    const parsed = parseCommandParamsInput();
-    normalizeTransferFactoryTemplateInParams(parsed);
-    await ensureTransferFactoryInputHoldingCids(p, parsed);
-    return prepareExecuteAndWait({
-      commands: parsed.commands as Record<string, unknown>,
-    });
   });
 });
 
@@ -2140,6 +2048,7 @@ resetTransferFactoryDiscoveryUI();
 els.transferAdvanced.open = false;
 setupPaneHeightSync();
 
-appendLog('INFO', 'Ready. Inject a provider to begin.', {
+appendLog('INFO', 'Ready. Click connect() to open the wallet picker.', {
   defaultRemoteUrl,
+  preferredGateway: els.remoteUrl.value.trim(),
 });

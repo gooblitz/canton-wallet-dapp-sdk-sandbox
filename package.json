@@ -10,7 +10,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@canton-network/dapp-sdk": "^0.21.2"
+    "@canton-network/dapp-sdk": "^0.23.0"
   },
   "devDependencies": {
     "typescript": "^5.9.2",

@@ -9,20 +9,13 @@
     <main class="app">
       <header>
         <h1>Canton dApp SDK Sandbox</h1>
-        <p>Quick local dApp for testing against your wallet (remote or extension provider).</p>
+        <p>Quick local dApp for testing the picker-based Canton wallet SDK flow against extension or remote gateways.</p>
       </header>
 
       <section class="workspace">
         <div class="left-pane">
           <section class="card">
             <h2>Settings</h2>
-            <label>
-              Wallet Type
-              <select id="walletType">
-                <option value="remote" selected>remote</option>
-                <option value="extension">extension</option>
-              </select>
-            </label>
             <label>
               Wallet Domain
               <input id="walletDomain" type="text" placeholder="https://lat-dn.cddev.site" />
@@ -36,19 +29,20 @@
               <input id="registryApiKey" type="text" placeholder="x-api-key value" />
             </label>
             <label>
-              Remote RPC URL (derived; editable)
+              Preferred Wallet Gateway URL (shown in picker)
               <input id="remoteUrl" type="text" />
             </label>
+            <p class="hint">connect() opens the SDK wallet picker with Browser Extension plus this configured gateway.</p>
             <div class="row">
-              <button id="openWallet">Open Wallet UI</button>
+              <button id="openWallet">Open Connected Wallet UI</button>
             </div>
           </section>
 
           <section class="card">
             <h2>Actions</h2>
             <div class="row wrap">
-              <button id="injectProvider">Inject Provider</button>
-              <button id="connect">connect()</button>
+              <button id="connect">connect() via picker</button>
+              <button id="disconnect">disconnect()</button>
               <button id="status">status()</button>
               <button id="listAccounts">listAccounts()</button>
               <button id="getPrimaryAccount">getPrimaryAccount()</button>
