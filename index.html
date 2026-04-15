@@ -17,6 +17,13 @@
           <section class="card">
             <h2>Settings</h2>
             <label>
+              Network
+              <select id="networkPreset">
+                <option value="devnet">DevNet</option>
+                <option value="testnet">TestNet</option>
+              </select>
+            </label>
+            <label>
               Wallet Domain
               <input id="walletDomain" type="text" placeholder="https://lat-dn.cddev.site" />
             </label>
@@ -58,6 +65,10 @@
             </div>
 
             <h3>Transfer Helper (prepareExecute)</h3>
+            <label>
+              Asset
+              <select id="transferAsset"></select>
+            </label>
             <label>
               Recipient Party ID
               <input id="transferToParty" type="text" placeholder="alice::1220..." />

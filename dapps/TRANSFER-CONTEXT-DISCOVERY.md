@@ -19,7 +19,8 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
 3. Query Token Standard off-ledger API via configured registry base URL:
    - `POST {registryUrl}/registry/transfer-instruction/v1/transfer-factory`
    - send `X-API-Key` from dApp settings
-   - relative endpoints must use `/api/registry-proxy` (same-origin Vite proxy)
+   - relative scan-proxy endpoints use `/api/registry-proxy...` (same-origin Vite proxy)
+   - relative utilities token-standard endpoints use `/api/token-standard/<network>/...`
    - absolute registry URLs are also supported
 4. Use response to prefill:
    - `factoryId` -> `ExerciseCommand.contractId`
@@ -34,14 +35,28 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
 2. Network config:
    - local storage map `networkId -> registryUrl`
    - env `VITE_REGISTRY_URLS_JSON`
-   - env `VITE_TOKEN_REGISTRY_URL` (devnet fallback)
+   - env `VITE_TOKEN_REGISTRY_URL` (DevNet fallback)
+   - env `VITE_TESTNET_REGISTRY_URL` (TestNet CC / scan-proxy fallback)
    - configured values may be relative proxy paths or absolute URLs
-3. CNS fallback (if `Scan URL` + instrument admin are available):
+3. Asset config:
+   - selected asset preset registry URL
+   - env `VITE_TOKEN_REGISTRY_URLS_JSON`, keyed by values such as `testnet:USDCx`
+   - env `VITE_TESTNET_USDCX_REGISTRY_URL`
+   - defaults to `/api/token-standard/testnet/registrars/<USDCx-admin>` for TestNet USDCx
+4. CNS fallback (if `Scan URL` + instrument admin are available):
    - proxy-style base path: `GET {scanUrl}/ans-entries/by-party/{adminParty}`
    - direct scan base path: `GET {scanUrl}/v0/ans-entries/by-party/{adminParty}`
    - parse description metadata key:
      - `splice.lfdecentralizedtrust.org/registryUrls`
    - discovered registry URLs may also be absolute URLs
+
+## Utilities Instrument Catalog
+
+- TestNet catalog endpoint:
+  - `GET https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all`
+- The catalog returns global utilities instrument configuration data such as registrar, provider, default identifier, additional identifiers, and issuer/holder requirements.
+- Use it for discovery, verification, and metadata checks.
+- Do not use it as the transfer-factory registry base. Transfer context still comes from a per-asset registry URL such as `/api/registry-proxy/testnet` or `/api/token-standard/testnet/registrars/<admin>`.
 
 ## Caching
 
@@ -58,5 +73,6 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
 - Wallet interaction after connect remains CIP-0103 dApp API.
 - Transfer factory/context discovery uses Token Standard off-ledger registry API.
 - dApp-side discovery auth is API-key based via `X-API-Key`.
-- Relative discovery endpoints go through same-origin `/api/registry-proxy` (Vite proxy to scan-proxy upstream).
+- Relative scan-proxy discovery endpoints go through same-origin `/api/registry-proxy...` (Vite proxy to scan-proxy upstream).
+- Relative utilities token-standard discovery endpoints go through same-origin `/api/token-standard/<network>/...`.
 - Absolute Registry / Scan URLs are fetched directly by the dApp.

@@ -65,7 +65,7 @@ type NetworkInfo = {
   networkId?: string;
 };
 
-type RegistryDiscoverySource = 'manual' | 'network-config' | 'cns';
+type RegistryDiscoverySource = 'manual' | 'network-config' | 'asset-config' | 'cns';
 
 type RegistryResolution = {
   registryUrl: string;
@@ -95,8 +95,29 @@ type RegistryUrlStore = Record<string, string>;
 type DomainSettingsStore = {
   walletDomain?: string;
   registryDomain?: string;
+  networkId?: string;
   // Legacy key kept for backward compatibility with existing localStorage.
   devnetRegistryDomain?: string;
+};
+
+type TransferAssetPreset = {
+  assetId: string;
+  label: string;
+  symbol: string;
+  instrumentId: string;
+  instrumentAdmin: string;
+  expectedAdmin: string;
+  registryUrl: string;
+};
+
+type NetworkPreset = {
+  networkId: string;
+  label: string;
+  walletDomain: string;
+  registryDomain: string;
+  scanUrl: string;
+  defaultRegistryUrl: string;
+  assets: TransferAssetPreset[];
 };
 
 type TransferFactoryRegistryResponse = {
@@ -114,6 +135,30 @@ type LedgerApiRPCResult = {
   response?: unknown;
 };
 
+type ActiveContractParts = {
+  contractId: string;
+  templateId: string;
+  interfaceId: string;
+  payload: Record<string, unknown>;
+  hasHoldingInterfaceView: boolean;
+};
+
+type HoldingLookupResult = {
+  contractIds: string[];
+  scannedContracts: number;
+  holdingCandidates: number;
+  instruments: Record<string, number>;
+  templates: Record<string, number>;
+};
+
+type AccountSummary = {
+  partyId: string;
+  primary?: boolean;
+  hint?: string;
+  networkId?: string;
+  signingProviderId?: string;
+};
+
 function qs<T extends HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) {
@@ -123,11 +168,13 @@ function qs<T extends HTMLElement>(selector: string): T {
 }
 
 const els = {
+  networkPreset: qs<HTMLSelectElement>('#networkPreset'),
   walletDomain: qs<HTMLInputElement>('#walletDomain'),
   devnetRegistryDomain: qs<HTMLInputElement>('#devnetRegistryDomain'),
   registryApiKey: qs<HTMLInputElement>('#registryApiKey'),
   remoteUrl: qs<HTMLInputElement>('#remoteUrl'),
   message: qs<HTMLInputElement>('#message'),
+  transferAsset: qs<HTMLSelectElement>('#transferAsset'),
   transferToParty: qs<HTMLInputElement>('#transferToParty'),
   transferAmount: qs<HTMLInputElement>('#transferAmount'),
   registryUrl: qs<HTMLInputElement>('#registryUrl'),
@@ -167,15 +214,35 @@ const layoutEls = {
 };
 
 const DEFAULT_WALLET_DOMAIN = 'https://lat-dn.cddev.site';
+const DEFAULT_TESTNET_WALLET_DOMAIN = 'https://lat-tn.cddev.site';
 const DEFAULT_DEVNET_REGISTRY_DOMAIN = 'https://sp-lat-dn.cddev.site';
+const DEFAULT_TESTNET_REGISTRY_DOMAIN = 'https://sp-lat-tn.cddev.site';
 const DEFAULT_REGISTRY_PROXY_BASE_PATH = '/api/registry-proxy';
+const DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH = '/api/token-standard';
+const DEFAULT_NETWORK_ID = 'devnet';
+const HOLDING_INTERFACE_ID = '#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding';
+const TESTNET_DSO_ADMIN =
+  'DSO::1220f22a8b8f2d813c25b9a684dc4dd52b532a0174d8e73a13cdf2baabfff7518337';
+const TESTNET_USDCX_ADMIN =
+  'decentralized-usdc-interchain-rep::122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61';
 const DOMAIN_SETTINGS_STORAGE_KEY = 'local_dapp_domain_settings_v1';
+const NETWORK_ID_STORAGE_KEY = 'local_dapp_network_id_v1';
 const REGISTRY_URLS_STORAGE_KEY = 'local_dapp_registry_urls_v1';
 const REGISTRY_URLS_META_KEY = 'splice.lfdecentralizedtrust.org/registryUrls';
 const TRANSFER_CONTEXT_CACHE_STORAGE_KEY = 'local_dapp_transfer_context_cache_v1';
 const TRANSFER_CONTEXT_CACHE_TTL_MS = 90 * 1000;
 const PLACEHOLDER_TEMPLATE_IDS = new Set(['pkg:Module:Template', '#pkg:Module:Template']);
+const ENV_NETWORK_ID = import.meta.env.VITE_NETWORK?.toString().trim() || DEFAULT_NETWORK_ID;
 const ENV_REGISTRY_URLS = parseEnvRegistryUrlMap(import.meta.env.VITE_REGISTRY_URLS_JSON?.toString().trim() || '');
+const ENV_TOKEN_REGISTRY_URLS = parseEnvRegistryUrlMap(
+  import.meta.env.VITE_TOKEN_REGISTRY_URLS_JSON?.toString().trim()
+    || import.meta.env.VITE_ASSET_REGISTRY_URLS_JSON?.toString().trim()
+    || '',
+);
+const ENV_WALLET_RPC_URLS = parseEnvRegistryUrlMap(import.meta.env.VITE_WALLET_RPC_URLS_JSON?.toString().trim() || '');
+const HOLDINGS_DIAGNOSTICS_ENABLED = ['1', 'true', 'yes', 'on'].includes(
+  (import.meta.env.VITE_HOLDINGS_DIAGNOSTICS?.toString().trim() || '').toLowerCase(),
+);
 const ENV_WALLET_DOMAIN = normalizeDomainValue(
   import.meta.env.VITE_WALLET_DOMAIN?.toString().trim() || DEFAULT_WALLET_DOMAIN,
   DEFAULT_WALLET_DOMAIN,
@@ -200,13 +267,19 @@ const ENV_SCAN_URL =
   import.meta.env.VITE_SCAN_URL?.toString().trim()
   || DEFAULT_REGISTRY_PROXY_BASE_PATH;
 const ENV_REGISTRY_API_KEY = import.meta.env.VITE_REGISTRY_API_KEY?.toString().trim() || '';
+const NETWORK_PRESETS = buildNetworkPresets();
+const initialNetworkId = normalizeNetworkId(
+  localStorage.getItem(NETWORK_ID_STORAGE_KEY)
+    || savedDomainSettings.networkId
+    || ENV_NETWORK_ID,
+);
 
+els.networkPreset.value = initialNetworkId;
 els.walletDomain.value = initialWalletDomain;
 els.devnetRegistryDomain.value = initialDevnetRegistryDomain;
 els.registryApiKey.value = ENV_REGISTRY_API_KEY;
 const defaultRemoteUrl =
-  import.meta.env.VITE_WALLET_RPC_URL?.toString().trim() ||
-  joinUrl(initialWalletDomain, '/api/v1/dapp');
+  getConfiguredWalletRpcUrl(initialNetworkId, initialWalletDomain);
 els.remoteUrl.value = defaultRemoteUrl;
 els.commandsJson.value = JSON.stringify(
   {
@@ -246,11 +319,16 @@ const logEntries: string[] = [];
 els.transferFactoryTemplateId.value = els.transferFactoryTemplateId.value.trim() || TRANSFER_FACTORY_TEMPLATE_ID;
 els.scanUrl.value = ENV_SCAN_URL;
 if (!els.registryUrl.value.trim()) {
-  const bootstrapRegistryUrl = ENV_SINGLE_REGISTRY_URL || loadRegistryUrlStore().devnet || '';
+  const bootstrapRegistryUrl =
+    getConfiguredRegistryUrl(initialNetworkId, '', { ignoreInput: true })
+    || ENV_SINGLE_REGISTRY_URL
+    || loadRegistryUrlStore().devnet
+    || '';
   if (bootstrapRegistryUrl) {
     els.registryUrl.value = bootstrapRegistryUrl;
   }
 }
+applyNetworkPreset(initialNetworkId, false);
 
 function now(): string {
   return new Date().toISOString().replace('T', ' ').replace('Z', '');
@@ -288,6 +366,12 @@ function appendLog(kind: 'INFO' | 'OK' | 'ERR', label: string, payload?: unknown
     logEntries.length = MAX_LOG_ENTRIES;
   }
   els.log.textContent = logEntries.join('\n\n');
+}
+
+function appendDiagnosticsLog(kind: 'INFO' | 'OK' | 'ERR', label: string, payload?: unknown): void {
+  if (HOLDINGS_DIAGNOSTICS_ENABLED) {
+    appendLog(kind, label, payload);
+  }
 }
 
 function stringify(value: unknown): string {
@@ -357,6 +441,205 @@ function normalizeDomainValue(raw: string, fallback: string): string {
   }
 }
 
+function normalizeNetworkId(raw: string): string {
+  const networkId = raw.trim().toLowerCase();
+  return networkId === 'testnet' ? 'testnet' : DEFAULT_NETWORK_ID;
+}
+
+function buildNetworkPresets(): Record<string, NetworkPreset> {
+  const testnetWalletDomain = normalizeDomainValue(
+    import.meta.env.VITE_TESTNET_WALLET_DOMAIN?.toString().trim() || DEFAULT_TESTNET_WALLET_DOMAIN,
+    DEFAULT_TESTNET_WALLET_DOMAIN,
+  );
+  const testnetRegistryUrl =
+    import.meta.env.VITE_TESTNET_REGISTRY_URL?.toString().trim()
+    || import.meta.env.VITE_TESTNET_TOKEN_REGISTRY_URL?.toString().trim()
+    || ENV_REGISTRY_URLS.testnet
+    || `${DEFAULT_REGISTRY_PROXY_BASE_PATH}/testnet`;
+  const testnetScanUrl =
+    import.meta.env.VITE_TESTNET_SCAN_URL?.toString().trim()
+    || testnetRegistryUrl;
+  const testnetUsdcxRegistryUrl =
+    import.meta.env.VITE_TESTNET_USDCX_REGISTRY_URL?.toString().trim()
+    || ENV_TOKEN_REGISTRY_URLS['testnet:USDCx']
+    || ENV_TOKEN_REGISTRY_URLS['testnet:usdcx']
+    || joinUrl(
+      `${DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH}/testnet`,
+      `/registrars/${encodeURIComponent(TESTNET_USDCX_ADMIN)}`,
+    );
+
+  return {
+    devnet: {
+      networkId: 'devnet',
+      label: 'DevNet',
+      walletDomain: ENV_WALLET_DOMAIN,
+      registryDomain: ENV_REGISTRY_DOMAIN,
+      scanUrl: ENV_SCAN_URL,
+      defaultRegistryUrl: ENV_SINGLE_REGISTRY_URL,
+      assets: [
+        {
+          assetId: 'CC',
+          label: 'CC (Amulet)',
+          symbol: 'CC',
+          instrumentId: 'Amulet',
+          instrumentAdmin: '',
+          expectedAdmin: '',
+          registryUrl: ENV_SINGLE_REGISTRY_URL,
+        },
+      ],
+    },
+    testnet: {
+      networkId: 'testnet',
+      label: 'TestNet',
+      walletDomain: testnetWalletDomain,
+      registryDomain: import.meta.env.VITE_TESTNET_REGISTRY_DOMAIN?.toString().trim()
+        ? normalizeDomainValue(import.meta.env.VITE_TESTNET_REGISTRY_DOMAIN.toString().trim(), DEFAULT_TESTNET_REGISTRY_DOMAIN)
+        : DEFAULT_TESTNET_REGISTRY_DOMAIN,
+      scanUrl: testnetScanUrl,
+      defaultRegistryUrl: testnetRegistryUrl,
+      assets: [
+        {
+          assetId: 'CC',
+          label: 'CC (Amulet)',
+          symbol: 'CC',
+          instrumentId: 'Amulet',
+          instrumentAdmin: TESTNET_DSO_ADMIN,
+          expectedAdmin: TESTNET_DSO_ADMIN,
+          registryUrl: testnetRegistryUrl,
+        },
+        {
+          assetId: 'USDCx',
+          label: 'USDCx',
+          symbol: 'USDCx',
+          instrumentId: 'USDCx',
+          instrumentAdmin: TESTNET_USDCX_ADMIN,
+          expectedAdmin: TESTNET_USDCX_ADMIN,
+          registryUrl: testnetUsdcxRegistryUrl,
+        },
+      ],
+    },
+  };
+}
+
+function getSelectedNetworkId(): string {
+  return normalizeNetworkId(els.networkPreset.value || initialNetworkId);
+}
+
+function getNetworkPreset(networkId: string): NetworkPreset {
+  return NETWORK_PRESETS[normalizeNetworkId(networkId)] || NETWORK_PRESETS[DEFAULT_NETWORK_ID];
+}
+
+function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): string {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  const networkSpecificUrl =
+    ENV_WALLET_RPC_URLS[normalizedNetworkId]
+    || (normalizedNetworkId === 'testnet'
+      ? import.meta.env.VITE_TESTNET_WALLET_RPC_URL?.toString().trim()
+      : '')
+    || (normalizedNetworkId === DEFAULT_NETWORK_ID
+      ? import.meta.env.VITE_WALLET_RPC_URL?.toString().trim()
+      : '');
+  if (networkSpecificUrl) {
+    return networkSpecificUrl;
+  }
+
+  const presetDomain = getNetworkPreset(normalizedNetworkId).walletDomain;
+  if (presetDomain) {
+    return joinUrl(presetDomain, '/api/v1/dapp');
+  }
+  if (walletDomain.trim()) {
+    return joinUrl(walletDomain, '/api/v1/dapp');
+  }
+  return '';
+}
+
+function assetRegistryKeys(networkId: string, instrumentAdmin: string, instrumentId: string): string[] {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  const keys: string[] = [];
+  if (instrumentAdmin && instrumentId) {
+    keys.push(`${normalizedNetworkId}:${instrumentAdmin}:${instrumentId}`);
+  }
+  if (instrumentId) {
+    keys.push(`${normalizedNetworkId}:${instrumentId}`);
+  }
+  keys.push(normalizedNetworkId);
+  return keys;
+}
+
+function findAssetPreset(networkId: string, instrumentAdmin: string, instrumentId: string): TransferAssetPreset | null {
+  const preset = getNetworkPreset(networkId);
+  const normalizedInstrumentId = instrumentId.trim();
+  const normalizedInstrumentAdmin = instrumentAdmin.trim();
+  return preset.assets.find((asset) => {
+    if (asset.instrumentId !== normalizedInstrumentId) return false;
+    if (normalizedInstrumentAdmin && asset.instrumentAdmin && asset.instrumentAdmin !== normalizedInstrumentAdmin) {
+      return false;
+    }
+    return true;
+  }) ?? null;
+}
+
+function getSelectedAssetPreset(): TransferAssetPreset | null {
+  const preset = getNetworkPreset(getSelectedNetworkId());
+  const assetId = els.transferAsset.value.trim();
+  return preset.assets.find((asset) => asset.assetId === assetId) ?? preset.assets[0] ?? null;
+}
+
+function populateTransferAssetOptions(networkId: string): void {
+  const preset = getNetworkPreset(networkId);
+  const previousAssetId = els.transferAsset.value.trim();
+  els.transferAsset.replaceChildren();
+
+  for (const asset of preset.assets) {
+    const option = document.createElement('option');
+    option.value = asset.assetId;
+    option.textContent = asset.label;
+    els.transferAsset.append(option);
+  }
+
+  const hasPrevious = preset.assets.some((asset) => asset.assetId === previousAssetId);
+  els.transferAsset.value = hasPrevious ? previousAssetId : (preset.assets[0]?.assetId ?? '');
+}
+
+function applySelectedAssetPreset(options: { overwriteRegistryUrl: boolean }): void {
+  const asset = getSelectedAssetPreset();
+  if (!asset) return;
+
+  els.transferInstrumentId.value = asset.instrumentId;
+  els.transferInstrumentAdmin.value = asset.instrumentAdmin;
+  els.transferExpectedAdmin.value = asset.expectedAdmin;
+  if (options.overwriteRegistryUrl || !els.registryUrl.value.trim()) {
+    els.registryUrl.value = asset.registryUrl;
+  }
+  resetTransferFactoryDiscoveryUI();
+}
+
+function applyNetworkPreset(networkId: string, persist = true): void {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  const preset = getNetworkPreset(normalizedNetworkId);
+  els.networkPreset.value = normalizedNetworkId;
+
+  if (preset.walletDomain) {
+    els.walletDomain.value = preset.walletDomain;
+  }
+  const walletRpcUrl = getConfiguredWalletRpcUrl(normalizedNetworkId, els.walletDomain.value.trim());
+  els.remoteUrl.value = walletRpcUrl;
+  els.devnetRegistryDomain.value = preset.registryDomain;
+  els.scanUrl.value = preset.scanUrl;
+  populateTransferAssetOptions(normalizedNetworkId);
+  applySelectedAssetPreset({ overwriteRegistryUrl: true });
+
+  if (persist) {
+    localStorage.setItem(NETWORK_ID_STORAGE_KEY, normalizedNetworkId);
+    saveDomainSettingsStore({
+      walletDomain: els.walletDomain.value.trim(),
+      registryDomain: els.devnetRegistryDomain.value.trim(),
+      networkId: normalizedNetworkId,
+      devnetRegistryDomain: els.devnetRegistryDomain.value.trim(),
+    });
+  }
+}
+
 function loadDomainSettingsStore(): DomainSettingsStore {
   const raw = localStorage.getItem(DOMAIN_SETTINGS_STORAGE_KEY);
   if (!raw) return {};
@@ -372,6 +655,9 @@ function loadDomainSettingsStore(): DomainSettingsStore {
     }
     if (typeof obj.registryDomain === 'string') {
       out.registryDomain = obj.registryDomain.trim();
+    }
+    if (typeof obj.networkId === 'string') {
+      out.networkId = normalizeNetworkId(obj.networkId);
     }
     if (typeof obj.devnetRegistryDomain === 'string') {
       out.devnetRegistryDomain = obj.devnetRegistryDomain.trim();
@@ -400,19 +686,31 @@ function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string):
 }
 
 function applyDomainSettings(persist = true): void {
+  const networkId = getSelectedNetworkId();
+  const networkPreset = getNetworkPreset(networkId);
+  const selectedAsset = getSelectedAssetPreset();
   const walletDomain = normalizeDomainValue(els.walletDomain.value, ENV_WALLET_DOMAIN);
-  const devnetRegistryDomain = normalizeDomainValue(els.devnetRegistryDomain.value, ENV_REGISTRY_DOMAIN);
-  const derivedRegistryURL = DEFAULT_REGISTRY_PROXY_BASE_PATH;
+  const devnetRegistryDomain = normalizeDomainValue(
+    els.devnetRegistryDomain.value,
+    networkPreset.registryDomain || ENV_REGISTRY_DOMAIN,
+  );
+  const derivedRegistryURL = selectedAsset?.registryUrl || networkPreset.defaultRegistryUrl;
   els.walletDomain.value = walletDomain;
   els.devnetRegistryDomain.value = devnetRegistryDomain;
-  els.remoteUrl.value = joinUrl(walletDomain, '/api/v1/dapp');
+  els.remoteUrl.value = getConfiguredWalletRpcUrl(networkId, walletDomain);
   els.registryUrl.value = derivedRegistryURL;
-  els.scanUrl.value = derivedRegistryURL;
-  rememberRegistryUrlForNetwork('devnet', derivedRegistryURL);
+  els.scanUrl.value = networkPreset.scanUrl || derivedRegistryURL;
+  rememberRegistryUrlForNetwork(
+    networkId,
+    derivedRegistryURL,
+    selectedAsset?.instrumentAdmin || '',
+    selectedAsset?.instrumentId || '',
+  );
   if (persist) {
     saveDomainSettingsStore({
       walletDomain,
       registryDomain: devnetRegistryDomain,
+      networkId,
       devnetRegistryDomain,
     });
   }
@@ -424,6 +722,7 @@ function applyDomainSettingsFromInputs(): void {
     appendLog('OK', 'settings -> applied domain defaults', {
       walletDomain: els.walletDomain.value.trim(),
       registryDomain: els.devnetRegistryDomain.value.trim(),
+      networkId: getSelectedNetworkId(),
       remoteUrl: els.remoteUrl.value.trim(),
       registryUrl: els.registryUrl.value.trim(),
       scanUrl: els.scanUrl.value.trim(),
@@ -479,28 +778,53 @@ function saveRegistryUrlStore(store: RegistryUrlStore): void {
   localStorage.setItem(REGISTRY_URLS_STORAGE_KEY, JSON.stringify(store));
 }
 
-function getConfiguredRegistryUrl(networkId: string): string {
+function getConfiguredRegistryUrl(
+  networkId: string,
+  instrumentAdmin = '',
+  options: { ignoreInput?: boolean; instrumentId?: string } = {},
+): string {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  const normalizedInstrumentAdmin = instrumentAdmin.trim();
+  const normalizedInstrumentId = options.instrumentId?.trim() || '';
   const fromInput = els.registryUrl.value.trim();
-  if (fromInput) return fromInput;
+  if (!options.ignoreInput && fromInput) return fromInput;
 
-  const local = loadRegistryUrlStore()[networkId];
-  if (local) return local;
+  const keys = assetRegistryKeys(normalizedNetworkId, normalizedInstrumentAdmin, normalizedInstrumentId);
+  const localStore = loadRegistryUrlStore();
+  for (const key of keys) {
+    const local = localStore[key];
+    if (local) return local;
+  }
 
-  const envMapped = ENV_REGISTRY_URLS[networkId];
-  if (envMapped) return envMapped;
+  for (const key of keys) {
+    const envMapped = ENV_TOKEN_REGISTRY_URLS[key] || ENV_REGISTRY_URLS[key];
+    if (envMapped) return envMapped;
+  }
 
-  if (networkId === 'devnet' && ENV_SINGLE_REGISTRY_URL) {
-    return ENV_SINGLE_REGISTRY_URL;
+  const assetPreset = findAssetPreset(normalizedNetworkId, normalizedInstrumentAdmin, normalizedInstrumentId);
+  if (assetPreset?.registryUrl) {
+    return assetPreset.registryUrl;
+  }
+
+  const networkPreset = getNetworkPreset(normalizedNetworkId);
+  if (networkPreset.defaultRegistryUrl) {
+    return networkPreset.defaultRegistryUrl;
   }
 
   return '';
 }
 
-function rememberRegistryUrlForNetwork(networkId: string, registryUrl: string): void {
+function rememberRegistryUrlForNetwork(
+  networkId: string,
+  registryUrl: string,
+  instrumentAdmin = '',
+  instrumentId = '',
+): void {
   const normalized = registryUrl.trim();
   if (!normalized) return;
   const store = loadRegistryUrlStore();
-  store[networkId] = normalized;
+  const keys = assetRegistryKeys(networkId, instrumentAdmin, instrumentId);
+  store[keys[0]] = normalized;
   saveRegistryUrlStore(store);
 }
 
@@ -579,6 +903,12 @@ function asInt(value: unknown): number | null {
   return null;
 }
 
+function asAmountString(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return value.toString();
+  return '';
+}
+
 function uniqueStrings(values: string[]): string[] {
   const out = new Set<string>();
   for (const value of values) {
@@ -590,7 +920,294 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 function isHoldingTemplateId(templateId: string): boolean {
-  return templateId === HOLDING_TEMPLATE_ID || templateId.endsWith(`:${HOLDING_TEMPLATE_ID}`);
+  if (templateId === HOLDING_TEMPLATE_ID || templateId.endsWith(`:${HOLDING_TEMPLATE_ID}`)) {
+    return true;
+  }
+  if (templateId.endsWith(':TestTokenHolding')) {
+    return true;
+  }
+  if (!templateId.endsWith(':Holding')) {
+    return false;
+  }
+  return !(
+    templateId.includes('TransferInstruction')
+    || templateId.includes('TransferOffer')
+    || templateId.includes('Factory')
+  );
+}
+
+function isHoldingInterfaceId(interfaceId: string): boolean {
+  return interfaceId === HOLDING_INTERFACE_ID || interfaceId.endsWith(':Splice.Api.Token.HoldingV1:Holding');
+}
+
+function extractOwnerFromPayload(payload: Record<string, unknown>): string {
+  return asString(payload.owner)
+    || asString(payload.holder)
+    || asString(asObject(payload.amulet)?.owner);
+}
+
+function extractAmountFromPayload(payload: Record<string, unknown>): string {
+  const direct = asAmountString(payload.amount);
+  if (direct) return direct;
+
+  const transfer = asObject(payload.transfer);
+  if (transfer) {
+    const transferAmount = extractAmountFromPayload(transfer);
+    if (transferAmount) return transferAmount;
+  }
+
+  const amount = asObject(payload.amount);
+  if (amount) {
+    return asAmountString(amount.amount)
+      || asAmountString(amount.value)
+      || asAmountString(amount.initialAmount);
+  }
+
+  const amulet = asObject(payload.amulet);
+  if (amulet) {
+    const amuletAmount = extractAmountFromPayload(amulet);
+    if (amuletAmount) return amuletAmount;
+  }
+
+  return asAmountString(payload.quantity);
+}
+
+function extractInstrumentIdFromPayload(payload: Record<string, unknown>): { admin: string; id: string } | null {
+  const directInstrumentId = asObject(payload.instrumentId);
+  const directId = asString(directInstrumentId?.id);
+  if (directId) {
+    return {
+      admin: asString(directInstrumentId?.admin),
+      id: directId,
+    };
+  }
+
+  const recordId = asString(payload.id);
+  const recordAdmin = asString(payload.admin) || asString(payload.source);
+  if (recordId && recordAdmin) {
+    return {
+      admin: recordAdmin,
+      id: recordId,
+    };
+  }
+
+  const transfer = asObject(payload.transfer);
+  if (transfer) {
+    const nested = extractInstrumentIdFromPayload(transfer);
+    if (nested) return nested;
+  }
+
+  const instrument = asObject(payload.instrument);
+  const instrumentId = asString(instrument?.id);
+  if (instrumentId) {
+    return {
+      admin: asString(instrument?.admin) || asString(instrument?.source) || asString(payload.registrar),
+      id: instrumentId,
+    };
+  }
+
+  const amount = asObject(payload.amount);
+  const unit = asObject(amount?.unit);
+  if (unit) {
+    const nested = extractInstrumentIdFromPayload(unit);
+    if (nested) return nested;
+  }
+
+  const tokenConfig = asObject(payload.tokenConfig);
+  const tokenId = asString(tokenConfig?.tokenId);
+  if (tokenId) {
+    return {
+      admin: asString(payload.admin),
+      id: tokenId,
+    };
+  }
+
+  const dso = asString(payload.dso);
+  if (dso) {
+    return {
+      admin: dso,
+      id: 'Amulet',
+    };
+  }
+
+  const amulet = asObject(payload.amulet);
+  if (amulet) {
+    const nested = extractInstrumentIdFromPayload(amulet);
+    if (nested) return nested;
+  }
+
+  return null;
+}
+
+function holdingMatchesInstrument(
+  templateId: string,
+  payload: Record<string, unknown>,
+  requestedInstrumentId: string,
+  requestedInstrumentAdmin: string,
+): boolean {
+  const instrumentId = requestedInstrumentId.trim();
+  const instrumentAdmin = requestedInstrumentAdmin.trim();
+  if (!instrumentId) {
+    return true;
+  }
+
+  const holdingInstrument = extractInstrumentIdFromPayload(payload);
+  if (!holdingInstrument) {
+    return instrumentId === 'Amulet' && isHoldingTemplateId(templateId);
+  }
+  if (holdingInstrument.id !== instrumentId) {
+    return false;
+  }
+  if (instrumentAdmin) {
+    if (!holdingInstrument.admin) {
+      return instrumentId === 'Amulet' && isHoldingTemplateId(templateId);
+    }
+    if (holdingInstrument.admin !== instrumentAdmin) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isTransferRelatedTemplateId(templateId: string): boolean {
+  return templateId.includes('TransferInstruction')
+    || templateId.includes('TransferOffer')
+    || templateId.includes('TransferFactory')
+    || templateId.includes('Factory');
+}
+
+function extractHoldingInterfaceViewPayload(value: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(value)) return null;
+  for (const item of value) {
+    const view = asObject(item);
+    if (!view || !isHoldingInterfaceId(asString(view.interfaceId))) continue;
+    const viewValue = asObject(view.viewValue);
+    if (viewValue) return viewValue;
+  }
+  return null;
+}
+
+function extractContractPayload(entry: Record<string, unknown>): {
+  payload: Record<string, unknown>;
+  hasHoldingInterfaceView: boolean;
+} {
+  const holdingViewPayload = extractHoldingInterfaceViewPayload(entry.interfaceViews);
+  if (holdingViewPayload) {
+    return {
+      payload: holdingViewPayload,
+      hasHoldingInterfaceView: true,
+    };
+  }
+
+  return {
+    payload: asObject(entry.payload)
+      || asObject(entry.createArgument)
+      || asObject(entry.createArguments)
+      || {},
+    hasHoldingInterfaceView: false,
+  };
+}
+
+function extractCreatedEventFromActiveContractEntry(entry: Record<string, unknown>): Record<string, unknown> | null {
+  const contractEntry = asObject(entry.contractEntry);
+  const activeContract = asObject(entry.activeContract);
+  const activeContractEntry = asObject(activeContract?.contractEntry);
+
+  return asObject(asObject(contractEntry?.JsActiveContract)?.createdEvent)
+    || asObject(asObject(activeContractEntry?.JsActiveContract)?.createdEvent)
+    || asObject(asObject(entry.JsActiveContract)?.createdEvent)
+    || asObject(entry.createdEvent);
+}
+
+function extractActiveContractPartsFromEntry(entryValue: unknown): ActiveContractParts | null {
+  const entry = asObject(entryValue);
+  if (!entry) return null;
+
+  const createdEvent = extractCreatedEventFromActiveContractEntry(entry);
+  if (createdEvent) {
+    const contractId = asString(createdEvent.contractId);
+    const templateId = asString(createdEvent.templateId);
+    if (!contractId) return null;
+    const { payload, hasHoldingInterfaceView } = extractContractPayload(createdEvent);
+    return {
+      contractId,
+      templateId,
+      interfaceId: hasHoldingInterfaceView ? HOLDING_INTERFACE_ID : asString(createdEvent.interfaceId),
+      payload,
+      hasHoldingInterfaceView,
+    };
+  }
+
+  const contractEntry =
+    asObject(entry.contractEntry)
+    || asObject(asObject(entry.activeContract)?.contractEntry)
+    || entry;
+  const contractId = asString(contractEntry.contractId);
+  if (!contractId) return null;
+
+  const { payload, hasHoldingInterfaceView } = extractContractPayload(contractEntry);
+  return {
+    contractId,
+    templateId: asString(contractEntry.templateId),
+    interfaceId: asString(contractEntry.interfaceId),
+    payload,
+    hasHoldingInterfaceView,
+  };
+}
+
+function extractActiveContractParts(payload: unknown): ActiveContractParts[] {
+  const payloadObject = asObject(payload);
+  const entries: unknown[] = Array.isArray(payload)
+    ? payload
+    : (Array.isArray(payloadObject?.activeContracts) ? payloadObject.activeContracts : []);
+  return entries
+    .map((entry) => extractActiveContractPartsFromEntry(entry))
+    .filter((entry): entry is ActiveContractParts => entry !== null);
+}
+
+function summarizeActiveContractsPayload(payload: unknown): Record<string, unknown> {
+  if (Array.isArray(payload)) {
+    return {
+      shape: 'array',
+      returnedEntries: payload.length,
+    };
+  }
+
+  const obj = asObject(payload);
+  if (!obj) {
+    return {
+      shape: typeof payload,
+      returnedEntries: 0,
+    };
+  }
+
+  const activeContracts = Array.isArray(obj.activeContracts) ? obj.activeContracts : null;
+  return {
+    shape: 'object',
+    keys: Object.keys(obj).slice(0, 8),
+    returnedEntries: activeContracts?.length ?? 0,
+  };
+}
+
+function isHoldingContractParts(parts: ActiveContractParts): boolean {
+  if (isTransferRelatedTemplateId(parts.templateId)) return false;
+  if (parts.hasHoldingInterfaceView || isHoldingInterfaceId(parts.interfaceId) || isHoldingTemplateId(parts.templateId)) {
+    return true;
+  }
+  return Boolean(
+    extractOwnerFromPayload(parts.payload)
+    && extractInstrumentIdFromPayload(parts.payload)
+    && extractAmountFromPayload(parts.payload),
+  );
+}
+
+function instrumentSummaryKey(instrument: { admin: string; id: string } | null): string {
+  if (!instrument) return 'unknown';
+  return instrument.admin ? `${instrument.admin}:${instrument.id}` : instrument.id;
+}
+
+function incrementSummary(summary: Record<string, number>, key: string): void {
+  summary[key] = (summary[key] ?? 0) + 1;
 }
 
 function shortContractId(contractId: string): string {
@@ -899,59 +1516,75 @@ async function dappLedgerApiJSON(
   return parseLedgerApiJSONResponse(result);
 }
 
-function extractHoldingContractIdsFromActiveContracts(payload: unknown, ownerPartyId: string): string[] {
+function extractHoldingContractIdsFromActiveContracts(
+  payload: unknown,
+  ownerPartyId: string,
+  instrumentId = '',
+  instrumentAdmin = '',
+): HoldingLookupResult {
   const ids: string[] = [];
+  const instruments: Record<string, number> = {};
+  const templates: Record<string, number> = {};
+  const contracts = extractActiveContractParts(payload);
+  let holdingCandidates = 0;
 
-  if (Array.isArray(payload)) {
-    for (const item of payload) {
-      const createdEvent = asObject(asObject(asObject(item)?.contractEntry)?.JsActiveContract)?.createdEvent;
-      const created = asObject(createdEvent);
-      if (!created) continue;
-      const contractId = asString(created.contractId);
-      const templateId = asString(created.templateId);
-      const owner = asString(asObject(created.createArgument)?.owner);
-      if (!contractId || !isHoldingTemplateId(templateId)) continue;
-      if (owner && owner !== ownerPartyId) continue;
-      ids.push(contractId);
-    }
-  }
+  for (const contract of contracts) {
+    if (!isHoldingContractParts(contract)) continue;
 
-  const obj = asObject(payload);
-  const activeContracts = Array.isArray(obj?.activeContracts) ? obj.activeContracts : [];
-  for (const item of activeContracts) {
-    const contract = asObject(item);
-    if (!contract) continue;
-    const contractId = asString(contract.contractId);
-    const templateId = asString(contract.templateId);
-    const owner = asString(asObject(contract.payload)?.owner);
-    if (!contractId || !isHoldingTemplateId(templateId)) continue;
+    const owner = extractOwnerFromPayload(contract.payload);
     if (owner && owner !== ownerPartyId) continue;
-    ids.push(contractId);
+
+    holdingCandidates += 1;
+    const holdingInstrument = extractInstrumentIdFromPayload(contract.payload);
+    incrementSummary(instruments, instrumentSummaryKey(holdingInstrument));
+    if (contract.templateId) {
+      incrementSummary(templates, contract.templateId);
+    }
+
+    if (!holdingMatchesInstrument(contract.templateId, contract.payload, instrumentId, instrumentAdmin)) continue;
+    ids.push(contract.contractId);
   }
 
-  return uniqueStrings(ids);
+  return {
+    contractIds: uniqueStrings(ids),
+    scannedContracts: contracts.length,
+    holdingCandidates,
+    instruments,
+    templates,
+  };
 }
 
-async function getPrimaryHoldingContractIds(p: RequestingProvider, ownerPartyId: string): Promise<string[]> {
-  const ledgerEndPayload = await dappLedgerApiJSON(p, 'GET', '/v2/state/ledger-end');
-  const offset = asInt(asObject(ledgerEndPayload)?.offset);
-  if (offset === null || offset < 0) {
-    throw new Error('Could not resolve ledger-end offset for holdings lookup');
-  }
+function buildActiveContractsBody(
+  ownerPartyId: string,
+  offset: number,
+  mode: 'holding-interface' | 'wildcard',
+): Record<string, unknown> {
+  const identifierFilter =
+    mode === 'holding-interface'
+      ? {
+          InterfaceFilter: {
+            value: {
+              interfaceId: HOLDING_INTERFACE_ID,
+              includeInterfaceView: true,
+              includeCreatedEventBlob: false,
+            },
+          },
+        }
+      : {
+          WildcardFilter: {
+            value: {
+              includeCreatedEventBlob: false,
+            },
+          },
+        };
 
-  const activeContractsPayload = await dappLedgerApiJSON(p, 'POST', '/v2/state/active-contracts', {
+  return {
     filter: {
       filtersByParty: {
         [ownerPartyId]: {
           cumulative: [
             {
-              identifierFilter: {
-                WildcardFilter: {
-                  value: {
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
+              identifierFilter,
             },
           ],
         },
@@ -959,15 +1592,126 @@ async function getPrimaryHoldingContractIds(p: RequestingProvider, ownerPartyId:
     },
     verbose: true,
     activeAtOffset: offset,
+  };
+}
+
+function mergeHoldingLookupResults(results: HoldingLookupResult[]): HoldingLookupResult {
+  const merged: HoldingLookupResult = {
+    contractIds: [],
+    scannedContracts: 0,
+    holdingCandidates: 0,
+    instruments: {},
+    templates: {},
+  };
+
+  for (const result of results) {
+    merged.contractIds.push(...result.contractIds);
+    merged.scannedContracts += result.scannedContracts;
+    merged.holdingCandidates += result.holdingCandidates;
+    for (const [instrument, count] of Object.entries(result.instruments)) {
+      merged.instruments[instrument] = (merged.instruments[instrument] ?? 0) + count;
+    }
+    for (const [template, count] of Object.entries(result.templates)) {
+      merged.templates[template] = (merged.templates[template] ?? 0) + count;
+    }
+  }
+
+  merged.contractIds = uniqueStrings(merged.contractIds);
+  return merged;
+}
+
+function firstSummaryKeys(summary: Record<string, number>, max = 5): string[] {
+  return Object.entries(summary)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, max)
+    .map(([key, count]) => `${key} (${count})`);
+}
+
+async function getPrimaryHoldingContractIds(
+  p: RequestingProvider,
+  ownerPartyId: string,
+  instrumentId = '',
+  instrumentAdmin = '',
+): Promise<string[]> {
+  const ledgerEndPayload = await dappLedgerApiJSON(p, 'GET', '/v2/state/ledger-end');
+  const offset = asInt(asObject(ledgerEndPayload)?.offset);
+  if (offset === null || offset < 0) {
+    throw new Error('Could not resolve ledger-end offset for holdings lookup');
+  }
+
+  appendDiagnosticsLog('INFO', 'holdings lookup -> probing active contracts', {
+    senderPartyId: ownerPartyId,
+    instrumentId: instrumentId || undefined,
+    instrumentAdmin: instrumentAdmin || undefined,
+    ledgerEndOffset: offset,
   });
 
-  const holdingContractIds = extractHoldingContractIdsFromActiveContracts(activeContractsPayload, ownerPartyId);
-  if (holdingContractIds.length === 0) {
-    throw new Error(
-      'No sender holdings found. Fund the sender wallet first (e.g. faucet) before preparing TransferFactory_Transfer.',
-    );
+  const lookupResults: HoldingLookupResult[] = [];
+  for (const mode of ['holding-interface', 'wildcard'] as const) {
+    try {
+      const activeContractsPayload = await dappLedgerApiJSON(
+        p,
+        'POST',
+        '/v2/state/active-contracts',
+        buildActiveContractsBody(ownerPartyId, offset, mode),
+      );
+      const lookupResult = extractHoldingContractIdsFromActiveContracts(
+        activeContractsPayload,
+        ownerPartyId,
+        instrumentId,
+        instrumentAdmin,
+      );
+      appendDiagnosticsLog('INFO', 'holdings lookup -> active-contracts response', {
+        mode,
+        ...summarizeActiveContractsPayload(activeContractsPayload),
+        extractedContracts: lookupResult.scannedContracts,
+        holdingCandidates: lookupResult.holdingCandidates,
+      });
+      lookupResults.push(lookupResult);
+      if (lookupResult.contractIds.length > 0) {
+        appendLog('INFO', 'holdings lookup -> selected sender holdings', {
+          instrumentId: instrumentId || undefined,
+          count: lookupResult.contractIds.length,
+        });
+        appendDiagnosticsLog('INFO', 'holdings lookup -> selected sender holding details', {
+          mode,
+          sample: lookupResult.contractIds.slice(0, 3).map(shortContractId),
+        });
+        return lookupResult.contractIds;
+      }
+    } catch (err) {
+      const normalized = normalizeError(err);
+      appendDiagnosticsLog('INFO', 'holdings lookup -> active-contracts query failed', {
+        mode,
+        message: normalized.message,
+      });
+    }
   }
-  return holdingContractIds;
+
+  const merged = mergeHoldingLookupResults(lookupResults);
+  const assetLabel = instrumentId ? ` for ${instrumentId}` : '';
+  const foundInstruments = firstSummaryKeys(merged.instruments).join(', ');
+  appendLog('INFO', 'holdings lookup -> no matching sender holdings', {
+    instrumentId: instrumentId || undefined,
+    scannedContracts: merged.scannedContracts,
+    holdingCandidates: merged.holdingCandidates,
+    foundInstruments: foundInstruments || undefined,
+  });
+  appendDiagnosticsLog('INFO', 'holdings lookup -> no matching sender holding details', {
+    instrumentId: instrumentId || undefined,
+    instrumentAdmin: instrumentAdmin || undefined,
+    instruments: merged.instruments,
+    templates: merged.templates,
+  });
+
+  const detail = foundInstruments
+    ? ` Visible holdings were for: ${foundInstruments}.`
+    : (merged.scannedContracts === 0
+        ? ' dApp ledgerApi returned zero active contracts for the sender party; check party selection, funding, or the wallet gateway ledgerApi proxy.'
+        : ' No matching Holding contracts were visible through ledgerApi.');
+  throw new Error(
+    `No sender holdings${assetLabel} found.${detail} Fund the sender wallet before preparing TransferFactory_Transfer.`,
+  );
 }
 
 async function getActiveNetworkId(p: RequestingProvider): Promise<string> {
@@ -1031,6 +1775,28 @@ function isRegistryProxyEndpoint(endpoint: string): boolean {
     && parsedEndpoint.pathname.startsWith(DEFAULT_REGISTRY_PROXY_BASE_PATH);
 }
 
+function isTokenStandardEndpoint(endpoint: string): boolean {
+  const normalizedEndpoint = endpoint.trim();
+  if (!normalizedEndpoint) {
+    return false;
+  }
+  if (normalizedEndpoint.startsWith(DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH)) {
+    return true;
+  }
+  const parsedEndpoint = parseUrl(normalizedEndpoint);
+  if (!parsedEndpoint) {
+    return false;
+  }
+  if (parsedEndpoint.origin === window.location.origin
+    && parsedEndpoint.pathname.startsWith(DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH)) {
+    return true;
+  }
+  return parsedEndpoint.hostname.endsWith('utilities.digitalasset-staging.com')
+    || parsedEndpoint.hostname.endsWith('utilities.digitalasset-dev.com')
+    || parsedEndpoint.hostname.endsWith('utilities.digitalasset.com')
+    || parsedEndpoint.pathname.includes('/api/token-standard/');
+}
+
 function getRequiredRegistryAPIKey(): string {
   const key = els.registryApiKey.value.trim();
   if (!key) {
@@ -1040,9 +1806,10 @@ function getRequiredRegistryAPIKey(): string {
 }
 
 async function fetchWithAPIKey(endpoint: string, init: RequestInit): Promise<Response> {
-  const apiKey = getRequiredRegistryAPIKey();
   const headers = new Headers(init.headers ?? {});
-  headers.set('X-API-Key', apiKey);
+  if (!isTokenStandardEndpoint(endpoint)) {
+    headers.set('X-API-Key', getRequiredRegistryAPIKey());
+  }
   return fetch(endpoint, {
     ...init,
     headers,
@@ -1052,9 +1819,11 @@ async function fetchWithAPIKey(endpoint: string, init: RequestInit): Promise<Res
 async function fetchForRegistryDiscovery(endpoint: string, init: RequestInit): Promise<Response> {
   const normalizedEndpoint = endpoint.trim();
   const isAbsoluteEndpoint = parseUrl(normalizedEndpoint) !== null;
-  if (!isAbsoluteEndpoint && !isRegistryProxyEndpoint(normalizedEndpoint)) {
+  if (!isAbsoluteEndpoint
+    && !isRegistryProxyEndpoint(normalizedEndpoint)
+    && !isTokenStandardEndpoint(normalizedEndpoint)) {
     throw new Error(
-      'Relative Registry / Scan endpoints must use /api/registry-proxy. Use an absolute URL for direct Registry / Scan endpoints.',
+      'Relative Registry / Scan endpoints must use /api/registry-proxy or /api/token-standard. Use an absolute URL for direct endpoints.',
     );
   }
   return fetchWithAPIKey(normalizedEndpoint, init);
@@ -1139,23 +1908,27 @@ async function discoverRegistryUrlsFromCns(scanUrl: string, adminPartyId: string
     .filter((url) => url.length > 0);
 }
 
-async function resolveRegistryUrl(networkId: string, instrumentAdmin: string): Promise<RegistryResolution> {
+async function resolveRegistryUrl(
+  networkId: string,
+  instrumentAdmin: string,
+  instrumentId: string,
+): Promise<RegistryResolution> {
   const fromInput = els.registryUrl.value.trim();
   if (fromInput) {
-    rememberRegistryUrlForNetwork(networkId, fromInput);
+    rememberRegistryUrlForNetwork(networkId, fromInput, instrumentAdmin, instrumentId);
     return {
       registryUrl: fromInput,
       source: 'manual',
     };
   }
 
-  const configured = getConfiguredRegistryUrl(networkId);
+  const configured = getConfiguredRegistryUrl(networkId, instrumentAdmin, { instrumentId });
   if (configured) {
     els.registryUrl.value = configured;
-    rememberRegistryUrlForNetwork(networkId, configured);
+    rememberRegistryUrlForNetwork(networkId, configured, instrumentAdmin, instrumentId);
     return {
       registryUrl: configured,
-      source: 'network-config',
+      source: findAssetPreset(networkId, instrumentAdmin, instrumentId) ? 'asset-config' : 'network-config',
     };
   }
 
@@ -1164,7 +1937,7 @@ async function resolveRegistryUrl(networkId: string, instrumentAdmin: string): P
     const discovered = await discoverRegistryUrlsFromCns(scanUrl, instrumentAdmin);
     if (discovered.length > 0) {
       els.registryUrl.value = discovered[0];
-      rememberRegistryUrlForNetwork(networkId, discovered[0]);
+      rememberRegistryUrlForNetwork(networkId, discovered[0], instrumentAdmin, instrumentId);
       return {
         registryUrl: discovered[0],
         source: 'cns',
@@ -1311,11 +2084,17 @@ async function resolveTransferFactoryContext(
   const networkId = await getActiveNetworkId(p);
   const partyId = await getPrimaryAccountPartyId(p);
   const senderPartyId = partyId;
+  const requestedInstrumentAdmin = transferInput.instrumentAdmin || transferInput.expectedAdmin || '';
   const inputHoldingCids =
     transferInput.inputHoldingCids.length > 0
       ? uniqueStrings(transferInput.inputHoldingCids)
-      : await getPrimaryHoldingContractIds(p, senderPartyId);
-  const { registryUrl } = await resolveRegistryUrl(networkId, transferInput.instrumentAdmin || '');
+      : await getPrimaryHoldingContractIds(
+        p,
+        senderPartyId,
+        transferInput.instrumentId,
+        requestedInstrumentAdmin,
+      );
+  const { registryUrl } = await resolveRegistryUrl(networkId, requestedInstrumentAdmin, transferInput.instrumentId);
 
   let expectedAdmin = transferInput.expectedAdmin || '';
   let instrumentAdmin = transferInput.instrumentAdmin || '';
@@ -1392,7 +2171,16 @@ async function resolveTransferFactoryContext(
 async function tryAutoConfigureRegistryUrl(p: RequestingProvider): Promise<void> {
   try {
     const networkId = await getActiveNetworkId(p);
-    const configured = getConfiguredRegistryUrl(networkId);
+    const normalizedNetworkId = normalizeNetworkId(networkId);
+    if (els.networkPreset.value !== normalizedNetworkId) {
+      applyNetworkPreset(normalizedNetworkId, true);
+    }
+    const asset = getSelectedAssetPreset();
+    const configured = getConfiguredRegistryUrl(
+      normalizedNetworkId,
+      asset?.instrumentAdmin || els.transferInstrumentAdmin.value.trim(),
+      { instrumentId: asset?.instrumentId || els.transferInstrumentId.value.trim() },
+    );
     if (!configured) {
       setTransferFactoryStatus(
         'No configured registry URL for this network. Set Registry URL or provide Scan URL + Instrument Admin.',
@@ -1401,9 +2189,14 @@ async function tryAutoConfigureRegistryUrl(p: RequestingProvider): Promise<void>
       return;
     }
     els.registryUrl.value = configured;
-    rememberRegistryUrlForNetwork(networkId, configured);
-    setTransferFactoryStatus(`Registry URL configured for ${networkId}: ${configured}`, 'ok');
-    appendLog('INFO', 'connect -> registry URL configured', { networkId, registryUrl: configured });
+    rememberRegistryUrlForNetwork(
+      normalizedNetworkId,
+      configured,
+      asset?.instrumentAdmin || els.transferInstrumentAdmin.value.trim(),
+      asset?.instrumentId || els.transferInstrumentId.value.trim(),
+    );
+    setTransferFactoryStatus(`Registry URL configured for ${normalizedNetworkId}: ${configured}`, 'ok');
+    appendLog('INFO', 'connect -> registry URL configured', { networkId: normalizedNetworkId, registryUrl: configured });
   } catch (err) {
     const normalized = normalizeError(err);
     setTransferFactoryStatus(normalized.message, 'warn');
@@ -1513,12 +2306,66 @@ function parseTransferHelperInput(): TransferHelperInput {
 }
 
 async function getPrimaryAccountPartyId(p: RequestingProvider): Promise<string> {
-  const account = await p.request<Record<string, unknown>>({ method: 'getPrimaryAccount' });
-  const partyId = typeof account.partyId === 'string' ? account.partyId.trim() : '';
+  const account = await getPrimaryAccount(p);
+  const partyId = account.partyId;
   if (!partyId) {
     throw new Error('Could not resolve partyId from getPrimaryAccount');
   }
   return partyId;
+}
+
+async function getPrimaryAccount(p: RequestingProvider): Promise<AccountSummary> {
+  const account = await p.request<Record<string, unknown>>({ method: 'getPrimaryAccount' });
+  return summarizeAccount(account);
+}
+
+function summarizeAccount(value: unknown): AccountSummary {
+  const account = asObject(value) ?? {};
+  const summary: AccountSummary = {
+    partyId: asString(account.partyId),
+  };
+  if (typeof account.primary === 'boolean') {
+    summary.primary = account.primary;
+  }
+  const hint = asString(account.hint);
+  if (hint) {
+    summary.hint = hint;
+  }
+  const networkId = asString(account.networkId);
+  if (networkId) {
+    summary.networkId = networkId;
+  }
+  const signingProviderId = asString(account.signingProviderId);
+  if (signingProviderId) {
+    summary.signingProviderId = signingProviderId;
+  }
+  return summary;
+}
+
+function summarizeAccounts(value: unknown): AccountSummary[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(summarizeAccount).filter((account) => account.partyId);
+}
+
+async function getAccountConnectionSummary(p: RequestingProvider): Promise<{
+  primaryAccount: AccountSummary;
+  accountCount: number;
+  accountPartyIds: string[];
+}> {
+  const primaryAccount = await getPrimaryAccount(p);
+  let accounts: AccountSummary[] = [];
+  try {
+    accounts = summarizeAccounts(await listAccounts());
+  } catch (err) {
+    appendLog('INFO', 'connect -> listAccounts summary skipped', { reason: normalizeError(err).message });
+  }
+  return {
+    primaryAccount,
+    accountCount: accounts.length,
+    accountPartyIds: accounts.map((account) => account.partyId),
+  };
 }
 
 function buildTransferPrepareExecutePayload(
@@ -1636,16 +2483,26 @@ async function ensureTransferFactoryInputHoldingCids(
   }
 
   const senderPartyId = await getPrimaryAccountPartyId(p);
-  const holdingContractIds = await getPrimaryHoldingContractIds(p, senderPartyId);
+  let injectedCount = 0;
+  const sampleHoldingCids: string[] = [];
   for (const transfer of transferPayloadsNeedingHoldings) {
+    const transferInstrument = asObject(transfer.instrumentId);
+    const holdingContractIds = await getPrimaryHoldingContractIds(
+      p,
+      senderPartyId,
+      asString(transferInstrument?.id),
+      asString(transferInstrument?.admin),
+    );
     transfer.inputHoldingCids = holdingContractIds;
+    injectedCount += holdingContractIds.length;
+    sampleHoldingCids.push(...holdingContractIds.slice(0, 3));
   }
 
   els.commandsJson.value = JSON.stringify(params, null, 2);
   appendLog('INFO', 'prepareExecute -> injected sender inputHoldingCids', {
     senderPartyId,
-    count: holdingContractIds.length,
-    sample: holdingContractIds.slice(0, 3),
+    count: injectedCount,
+    sample: sampleHoldingCids.slice(0, 3),
   });
 }
 
@@ -1823,8 +2680,36 @@ async function signMessageRemoteWithApproval(message: string): Promise<Record<st
   }
 }
 
+els.networkPreset.addEventListener('change', () => {
+  try {
+    applyNetworkPreset(els.networkPreset.value, true);
+    appendLog('OK', 'settings -> applied network preset', {
+      networkId: getSelectedNetworkId(),
+      asset: els.transferAsset.value,
+      remoteUrl: els.remoteUrl.value.trim(),
+      registryUrl: els.registryUrl.value.trim(),
+      scanUrl: els.scanUrl.value.trim(),
+    });
+  } catch (err) {
+    const normalized = normalizeError(err);
+    appendLog('ERR', 'settings -> failed to apply network preset', normalized);
+  }
+});
+
 els.walletDomain.addEventListener('change', applyDomainSettingsFromInputs);
 els.devnetRegistryDomain.addEventListener('change', applyDomainSettingsFromInputs);
+
+els.transferAsset.addEventListener('change', () => {
+  applySelectedAssetPreset({ overwriteRegistryUrl: true });
+  const asset = getSelectedAssetPreset();
+  appendLog('INFO', 'transfer helper -> asset selected', {
+    networkId: getSelectedNetworkId(),
+    asset: asset?.assetId,
+    instrumentId: asset?.instrumentId,
+    instrumentAdmin: asset?.instrumentAdmin || undefined,
+    registryUrl: els.registryUrl.value.trim(),
+  });
+});
 
 els.openWallet.addEventListener('click', () => {
   void run('open', async () => {
@@ -1844,10 +2729,14 @@ els.connect.addEventListener('click', () => {
     eventsSubscribed = false;
     resetTransferFactoryDiscoveryUI();
     await tryAutoConfigureRegistryUrl(p);
+    const accountSummary = await getAccountConnectionSummary(p);
+    appendLog('INFO', 'connect -> active account', accountSummary);
     return {
       ...(asObject(result) ?? {}),
       picker: true,
       preferredGateway: els.remoteUrl.value.trim() || undefined,
+      activePartyId: accountSummary.primaryAccount.partyId,
+      accountCount: accountSummary.accountCount,
     };
   });
 });
@@ -1880,7 +2769,7 @@ els.listAccounts.addEventListener('click', () => {
 
 els.getPrimaryAccount.addEventListener('click', () => {
   void run('getPrimaryAccount', async () => {
-    return ensureProvider().request({ method: 'getPrimaryAccount' });
+    return getPrimaryAccount(ensureProvider());
   });
 });
 
@@ -1925,7 +2814,12 @@ els.prefillTransferCommand.addEventListener('click', () => {
     const p = ensureProvider();
     const senderPartyId = await getPrimaryAccountPartyId(p);
     const transferInput = parseTransferHelperInput();
-    transferInput.inputHoldingCids = await getPrimaryHoldingContractIds(p, senderPartyId);
+    transferInput.inputHoldingCids = await getPrimaryHoldingContractIds(
+      p,
+      senderPartyId,
+      transferInput.instrumentId,
+      transferInput.instrumentAdmin || transferInput.expectedAdmin || '',
+    );
     let resolved: ResolvedTransferContext | null = null;
 
     if (!els.transferFactoryManualOverride.checked) {
