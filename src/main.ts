@@ -159,6 +159,12 @@ type AccountSummary = {
   signingProviderId?: string;
 };
 
+type AccountConnectionSummary = {
+  primaryAccount: AccountSummary;
+  accountCount: number;
+  accountPartyIds: string[];
+};
+
 function qs<T extends HTMLElement>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (!element) {
@@ -173,6 +179,9 @@ const els = {
   devnetRegistryDomain: qs<HTMLInputElement>('#devnetRegistryDomain'),
   registryApiKey: qs<HTMLInputElement>('#registryApiKey'),
   remoteUrl: qs<HTMLInputElement>('#remoteUrl'),
+  remotePickerLabel: qs<HTMLElement>('#remotePickerLabel'),
+  connectedAccountLabel: qs<HTMLElement>('#connectedAccountLabel'),
+  connectedAccountMeta: qs<HTMLParagraphElement>('#connectedAccountMeta'),
   message: qs<HTMLInputElement>('#message'),
   transferAsset: qs<HTMLSelectElement>('#transferAsset'),
   transferToParty: qs<HTMLInputElement>('#transferToParty'),
@@ -638,6 +647,8 @@ function applyNetworkPreset(networkId: string, persist = true): void {
       devnetRegistryDomain: els.devnetRegistryDomain.value.trim(),
     });
   }
+
+  syncWalletIdentityPreview();
 }
 
 function loadDomainSettingsStore(): DomainSettingsStore {
@@ -714,6 +725,8 @@ function applyDomainSettings(persist = true): void {
       devnetRegistryDomain,
     });
   }
+
+  syncWalletIdentityPreview();
 }
 
 function applyDomainSettingsFromInputs(): void {
@@ -1276,6 +1289,79 @@ function clearPersistedWalletSessionState(): void {
   (window as Window & { canton?: RequestingProvider }).canton = undefined;
 }
 
+function buildRemotePickerEntryLabel(rpcUrl: string): string {
+  const trimmedRpcUrl = rpcUrl.trim();
+  if (!trimmedRpcUrl) {
+    return 'No configured gateway';
+  }
+
+  const parsedRpcUrl = parseUrl(trimmedRpcUrl);
+  if (!parsedRpcUrl) {
+    return 'Configured Gateway (invalid URL)';
+  }
+
+  return `Configured Gateway (${parsedRpcUrl.host})`;
+}
+
+function getWalletSourceLabel(): string {
+  const discovery = loadKernelDiscoveryState();
+  if (discovery?.walletType === 'extension') {
+    return 'Browser extension';
+  }
+  if (discovery?.walletType === 'remote') {
+    const parsedRemoteUrl = parseUrl(asString(discovery.url));
+    return parsedRemoteUrl ? `Remote gateway ${parsedRemoteUrl.host}` : 'Remote gateway';
+  }
+  return 'No active wallet';
+}
+
+function renderConnectedAccount(summary: AccountConnectionSummary | null): void {
+  if (!summary?.primaryAccount.partyId) {
+    els.connectedAccountLabel.textContent = 'Not connected';
+    els.connectedAccountLabel.removeAttribute('title');
+    els.connectedAccountMeta.textContent = 'Connect to resolve the active party/account identity.';
+    return;
+  }
+
+  const accountLabel = summary.primaryAccount.hint || summary.primaryAccount.partyId;
+  const accountMetaParts = [
+    getWalletSourceLabel(),
+    getNetworkPreset(summary.primaryAccount.networkId || getSelectedNetworkId()).label,
+    summary.accountCount > 0
+      ? `${summary.accountCount} account${summary.accountCount === 1 ? '' : 's'}`
+      : 'account count unavailable',
+  ];
+
+  els.connectedAccountLabel.textContent = accountLabel;
+  els.connectedAccountLabel.title = summary.primaryAccount.partyId;
+  els.connectedAccountMeta.textContent = accountMetaParts.join(' • ');
+}
+
+function syncWalletIdentityPreview(): void {
+  const remoteUrl = els.remoteUrl.value.trim();
+  els.remotePickerLabel.textContent = buildRemotePickerEntryLabel(remoteUrl);
+  if (remoteUrl) {
+    els.remotePickerLabel.setAttribute('title', remoteUrl);
+  } else {
+    els.remotePickerLabel.removeAttribute('title');
+  }
+}
+
+async function refreshConnectedAccountPreview(): Promise<void> {
+  const provider = getInjectedProvider();
+  if (!provider) {
+    renderConnectedAccount(null);
+    return;
+  }
+
+  try {
+    renderConnectedAccount(await getAccountConnectionSummary(provider));
+  } catch (err) {
+    appendLog('INFO', 'connected account preview -> refresh skipped', { reason: normalizeError(err).message });
+    renderConnectedAccount(null);
+  }
+}
+
 function getCurrentProviderKind(): 'remote' | 'extension' | 'unknown' {
   const discovery = loadKernelDiscoveryState();
   if (discovery?.walletType === 'remote') {
@@ -1306,7 +1392,7 @@ function buildPickerConnectOptions(): {
     defaultAdapters,
     additionalAdapters: [
       new RemoteAdapter({
-        name: `Configured Gateway (${parsedPreferredGatewayUrl.host})`,
+        name: buildRemotePickerEntryLabel(parsedPreferredGatewayUrl.toString()),
         rpcUrl: parsedPreferredGatewayUrl.toString(),
       }),
     ],
@@ -2349,11 +2435,7 @@ function summarizeAccounts(value: unknown): AccountSummary[] {
   return value.map(summarizeAccount).filter((account) => account.partyId);
 }
 
-async function getAccountConnectionSummary(p: RequestingProvider): Promise<{
-  primaryAccount: AccountSummary;
-  accountCount: number;
-  accountPartyIds: string[];
-}> {
+async function getAccountConnectionSummary(p: RequestingProvider): Promise<AccountConnectionSummary> {
   const primaryAccount = await getPrimaryAccount(p);
   let accounts: AccountSummary[] = [];
   try {
@@ -2667,7 +2749,8 @@ async function prepareExecuteRemoteWithLogging(
 }
 
 async function signMessageRemoteWithApproval(message: string): Promise<Record<string, unknown>> {
-  // SDK 0.23 still does not proxy remote signMessage, so bridge directly to the selected wallet gateway.
+  // The SDK exposes signMessage(), but the remote provider path does not surface
+  // pending-approval userUrl data, so the sandbox still bridges directly here.
   try {
     return await rpcRequest<Record<string, unknown>>('signMessage', { message });
   } catch (initialErr) {
@@ -2717,6 +2800,8 @@ els.networkPreset.addEventListener('change', () => {
 
 els.walletDomain.addEventListener('change', applyDomainSettingsFromInputs);
 els.devnetRegistryDomain.addEventListener('change', applyDomainSettingsFromInputs);
+els.remoteUrl.addEventListener('change', syncWalletIdentityPreview);
+els.remoteUrl.addEventListener('input', syncWalletIdentityPreview);
 
 els.transferAsset.addEventListener('change', () => {
   applySelectedAssetPreset({ overwriteRegistryUrl: true });
@@ -2749,6 +2834,7 @@ els.connect.addEventListener('click', () => {
     resetTransferFactoryDiscoveryUI();
     await tryAutoConfigureRegistryUrl(p);
     const accountSummary = await getAccountConnectionSummary(p);
+    renderConnectedAccount(accountSummary);
     appendLog('INFO', 'connect -> active account', accountSummary);
     return {
       ...(asObject(result) ?? {}),
@@ -2768,6 +2854,7 @@ els.disconnect.addEventListener('click', () => {
       clearPersistedWalletSessionState();
       eventsSubscribed = false;
       resetTransferFactoryDiscoveryUI();
+      renderConnectedAccount(null);
     }
   });
 });
@@ -2788,7 +2875,14 @@ els.listAccounts.addEventListener('click', () => {
 
 els.getPrimaryAccount.addEventListener('click', () => {
   void run('getPrimaryAccount', async () => {
-    return getPrimaryAccount(ensureProvider());
+    const provider = ensureProvider();
+    const account = await getPrimaryAccount(provider);
+    renderConnectedAccount({
+      primaryAccount: account,
+      accountCount: 0,
+      accountPartyIds: account.partyId ? [account.partyId] : [],
+    });
+    return account;
   });
 });
 
@@ -2944,9 +3038,11 @@ els.subscribeEvents.addEventListener('click', () => {
 
     await onStatusChanged((event) => {
       appendLog('INFO', 'event: statusChanged', event);
+      void refreshConnectedAccountPreview();
     });
     await onAccountsChanged((event) => {
       appendLog('INFO', 'event: accountsChanged', event);
+      void refreshConnectedAccountPreview();
     });
     await onTxChanged((event) => {
       appendLog('INFO', 'event: txChanged', event);
@@ -2966,6 +3062,8 @@ setTransferFactoryManualMode(false);
 resetTransferFactoryDiscoveryUI();
 els.transferAdvanced.open = false;
 setupPaneHeightSync();
+syncWalletIdentityPreview();
+void refreshConnectedAccountPreview();
 
 appendLog('INFO', 'Ready. Click connect() to open the wallet picker.', {
   defaultRemoteUrl,

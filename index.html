@@ -39,7 +39,21 @@
               Preferred Wallet Gateway URL (shown in picker)
               <input id="remoteUrl" type="text" />
             </label>
-            <p class="hint">connect() opens the SDK wallet picker with Browser Extension plus this configured gateway.</p>
+            <p class="hint">
+              connect() opens the SDK wallet picker with Browser Extension plus this configured gateway. The picker
+              identifies the wallet/gateway; the active party/account is shown after connect.
+            </p>
+            <div class="identity-summary" aria-live="polite">
+              <div class="identity-row">
+                <span class="identity-label">Remote Picker Entry</span>
+                <span id="remotePickerLabel" class="identity-value">Configured Gateway</span>
+              </div>
+              <div class="identity-row">
+                <span class="identity-label">Connected Account</span>
+                <span id="connectedAccountLabel" class="identity-value">Not connected</span>
+              </div>
+              <p id="connectedAccountMeta" class="hint">Connect to resolve the active party/account identity.</p>
+            </div>
             <div class="row">
               <button id="openWallet">Open Connected Wallet UI</button>
             </div>

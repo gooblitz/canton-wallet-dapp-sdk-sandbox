@@ -5,7 +5,7 @@
 Use a wallet-agnostic transfer prefill flow based on Token Standard registry APIs.
 
 This is intentionally separate from wallet connection UX. The sandbox now connects wallets through the
-`@canton-network/dapp-sdk@^0.23.x` picker flow, then uses the connected provider for account and submit calls.
+`@canton-network/dapp-sdk@^1.0.0` picker flow, then uses the connected provider for account and submit calls.
 
 ## Current Flow
 
