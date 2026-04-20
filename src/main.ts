@@ -2647,6 +2647,25 @@ async function prepareExecuteAndWaitRemote(
   }
 }
 
+async function prepareExecuteRemoteWithLogging(
+  params: Record<string, unknown>,
+): Promise<null> {
+  try {
+    const response = await rpcRequest<unknown>('prepareExecute', params);
+    appendLog('INFO', 'prepareExecute -> raw remote response', response);
+    if (response && typeof response === 'object' && !Array.isArray(response)) {
+      const userUrl = asString((response as Record<string, unknown>).userUrl);
+      if (userUrl) {
+        openUserUrl(userUrl);
+      }
+    }
+    return null;
+  } catch (err) {
+    appendLog('INFO', 'prepareExecute -> raw remote error', err);
+    throw err;
+  }
+}
+
 async function signMessageRemoteWithApproval(message: string): Promise<Record<string, unknown>> {
   // SDK 0.23 still does not proxy remote signMessage, so bridge directly to the selected wallet gateway.
   try {
@@ -2858,10 +2877,16 @@ els.prepareExecute.addEventListener('click', () => {
     normalizeTransferFactoryTemplateInParams(params);
     await ensureTransferFactoryInputHoldingCids(p, params);
     try {
+      if (getCurrentProviderKind() === 'remote') {
+        return await prepareExecuteRemoteWithLogging(params);
+      }
       return await prepareExecute(toPrepareExecuteParams(params));
     } catch (err) {
       const refreshed = await maybeRefreshTransferFactoryAfterFailure(p, params, err);
       if (!refreshed) throw err;
+      if (getCurrentProviderKind() === 'remote') {
+        return prepareExecuteRemoteWithLogging(params);
+      }
       return prepareExecute(toPrepareExecuteParams(params));
     }
   });
@@ -2893,7 +2918,7 @@ els.ledgerVersion.addEventListener('click', () => {
   void run('ledgerApi(/v2/version)', async () => {
     ensureProvider();
     const result = await ledgerApi({
-      requestMethod: 'GET',
+      requestMethod: 'get',
       resource: '/v2/version',
     });
 
