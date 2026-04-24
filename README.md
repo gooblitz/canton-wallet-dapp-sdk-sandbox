@@ -4,7 +4,7 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 
 ## What this tests
 
-- SDK wallet picker flow (`@canton-network/dapp-sdk@^1.0.0`)
+- SDK wallet picker flow (`@canton-network/dapp-sdk@^1.1.0`)
 - DevNet and TestNet transfer presets for supported assets
 - `connect`, `disconnect`, `status`, `listAccounts`
 - `getPrimaryAccount` via provider request
@@ -100,7 +100,8 @@ Open: `http://127.0.0.1:4174`
 - The default TestNet registry / scan-proxy target is `https://sp-lat-tn.cddev.site`.
 - USDCx uses the utilities token-standard registrar route under `/api/token-standard/testnet/registrars/<USDCx-admin>`.
 - The utilities TestNet instrument configuration catalog is `https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all`; it is useful for asset discovery/metadata checks, but it is not the per-asset transfer-factory registry endpoint.
-- The connect flow now uses the SDK picker. The configured gateway URL in Settings is only used to seed that picker; the active remote session may come from a different picker entry.
+- The normal connect flow initializes the SDK picker with `init()` before `connect()`, matching the SDK 1.1.0 adapter-registration API. The configured gateway URL in Settings is only used to seed that picker; the active remote session may come from a different picker entry.
+- SDK 1.1.0 adds `WalletConnectAdapter`. This sandbox installs the optional WalletConnect peer packages because Vite dev optimization of SDK 1.1.0 imports that code path, but it does not register the adapter yet. Enabling WalletConnect should be a separate change with a configured WalletConnect project ID and wallet-side approval testing.
 - The UI now separates wallet/gateway identity from account identity: the picker entry identifies the wallet source, while the page shows the resolved connected party/account after `connect()`.
 - Relative Registry / Scan endpoints should use same-origin `/api/registry-proxy...` for scan-proxy routes or `/api/token-standard...` for utilities token-standard routes; absolute Registry / Scan URLs are also supported.
 - Scan-proxy requests include `X-API-Key` from the UI; utilities token-standard proxy requests do not require that key.
@@ -115,6 +116,8 @@ Open: `http://127.0.0.1:4174`
 
 - `connect -> Failed to open popup window`
   - In macOS Safari, allow popups for the sandbox origin, then retry from a fresh `connect()` click.
+- Page renders without styling in Chrome/Safari after dependency changes
+  - Restart the dev server with `npm run dev -- --force`, then hard-reload the browser tab. Stale or incomplete Vite optimized dependencies can throw before `/src/styles.css` is applied.
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
   - Verify `Registry / Scan API Key` in the UI matches a configured key for your upstream scan-proxy.
   - If upstream expects bearer auth too, set `SCAN_PROXY_UPSTREAM_AUTH`.

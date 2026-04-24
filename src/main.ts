@@ -4,6 +4,7 @@ import {
   dappSDK,
   disconnect,
   ExtensionAdapter,
+  init,
   ledgerApi,
   listAccounts,
   onAccountsChanged,
@@ -1292,7 +1293,7 @@ function shouldUseSafariDirectRemoteConnect(): boolean {
 }
 
 function setSDKSingletonClientForSafariRemote(client: DappClient | null): void {
-  // 2026-04-24: SDK 1.0.0/1.1.0 has no supported direct-remote connect API
+  // 2026-04-24: SDK 1.1.0 has no supported direct-remote connect API
   // that both bypasses the picker and preserves module-level helpers like
   // status(), listAccounts(), and open(). Keep this isolated so it can be
   // removed when upstream exposes a public equivalent.
@@ -1338,6 +1339,11 @@ async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
     }
     throw err;
   }
+}
+
+async function connectWithSDKPicker(): Promise<SDKConnectResult> {
+  await init(buildPickerConnectOptions());
+  return connect();
 }
 
 function maybeOpenUserUrl(err: unknown): void {
@@ -2940,7 +2946,7 @@ els.connect.addEventListener('click', () => {
     }
     const result = useSafariDirectRemoteConnect
       ? await connectSafariRemoteDirect()
-      : await connect(buildPickerConnectOptions());
+      : await connectWithSDKPicker();
     const p = ensureProvider();
     eventsSubscribed = false;
     resetTransferFactoryDiscoveryUI();

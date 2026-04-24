@@ -1,6 +1,6 @@
 # Safari Remote Wallet Popup Notes
 
-Last reviewed: 2026-04-24
+Last reviewed: 2026-04-24 against `@canton-network/dapp-sdk@1.1.0`
 
 ## Symptom
 
@@ -39,7 +39,7 @@ Findings as of 2026-04-24:
 - [PR #1561](https://github.com/hyperledger-labs/splice-wallet-kernel/pull/1561) added the global popup for async dApp API wallets because a new `userUrl` popup can be blocked by the browser.
 - [PR #1560](https://github.com/hyperledger-labs/splice-wallet-kernel/pull/1560) was an alternate popup-closing fix and explicitly notes that secure browser contexts require direct user input for each popup or redirect. It was closed unmerged.
 - [PR #1091](https://github.com/hyperledger-labs/splice-wallet-kernel/pull/1091) added earlier blockage-friendly popup handling, tested against Chrome and Firefox.
-- `@canton-network/dapp-sdk@1.1.0` was released on 2026-04-24 with WalletConnect and discovery improvements, but the remote HTTP connect path still opens `response.userUrl` after `await provider.request({ method: "connect" })`. It does not appear to fix this Safari-specific flow.
+- `@canton-network/dapp-sdk@1.1.0` was released on 2026-04-24 with `init()` discovery improvements, `WalletConnectAdapter`, and an empty-adapter-list fix. The remote HTTP connect path still opens `response.userUrl` after `await provider.request({ method: "connect" })`, so it does not appear to fix this Safari-specific flow.
 
 ## Revisit Checklist
 
