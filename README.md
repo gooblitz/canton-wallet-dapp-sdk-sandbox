@@ -109,9 +109,12 @@ Open: `http://127.0.0.1:4174`
 - `getPrimaryAccount` now goes through the injected SDK provider for both extension and remote connections.
 - `prepareExecuteAndWait` uses the SDK helper for extension wallets, but keeps a custom remote wait path so the sandbox can wait up to 5 minutes and correlate `txChanged` events by `commandId`.
 - `signMessage` is still a special case for remote gateways in this sandbox: although the SDK exposes `signMessage()`, the remote provider path does not surface pending-approval `userUrl` data, so the sandbox calls the connected gateway directly using the SDK-managed session token.
+- macOS Safari blocks async popups more strictly than Chrome. When macOS Safari and a remote gateway are configured, the sandbox connects directly to the configured gateway and primes the SDK wallet popup from the initial `connect()` click so the remote wallet approval can reuse that window. See [Safari remote popup notes](dapps/SAFARI-REMOTE-POPUP.md).
 
 ## Troubleshooting
 
+- `connect -> Failed to open popup window`
+  - In macOS Safari, allow popups for the sandbox origin, then retry from a fresh `connect()` click.
 - `Registry info lookup failed: HTTP 401` / `The supplied authentication is invalid`
   - Verify `Registry / Scan API Key` in the UI matches a configured key for your upstream scan-proxy.
   - If upstream expects bearer auth too, set `SCAN_PROXY_UPSTREAM_AUTH`.

@@ -10,6 +10,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@canton-network/core-wallet-ui-components": "^1.0.0",
     "@canton-network/dapp-sdk": "^1.0.0"
   },
   "devDependencies": {

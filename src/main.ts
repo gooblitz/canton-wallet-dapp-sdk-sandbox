@@ -1,5 +1,7 @@
 import {
   connect,
+  DappClient,
+  dappSDK,
   disconnect,
   ExtensionAdapter,
   ledgerApi,
@@ -13,12 +15,18 @@ import {
   RemoteAdapter,
   status,
 } from '@canton-network/dapp-sdk';
+import { popup as walletPopup } from '@canton-network/core-wallet-ui-components';
 import './styles.css';
 
 type RequestingProvider = {
   request<T>(payload: { method: string; params?: Record<string, unknown> | unknown[] }): Promise<T>;
   on<T>(event: string, listener: (event: T) => void): RequestingProvider;
   removeListener<T>(event: string, listener: (event: T) => void): RequestingProvider;
+};
+
+type SDKConnectResult = Awaited<ReturnType<typeof connect>>;
+type DappSDKWithInternalClient = {
+  client: DappClient | null;
 };
 
 type SDKStatusSnapshot = Awaited<ReturnType<typeof status>>;
@@ -1231,9 +1239,104 @@ function shortContractId(contractId: string): string {
 function openUserUrl(userUrl: string): void {
   appendLog('INFO', 'Opening userUrl', { userUrl });
   // Keep opener reference so /dapp/login can postMessage the exchanged dApp token back.
-  const popup = window.open(userUrl, 'canton-wallet-connect', 'popup,width=460,height=720');
-  if (!popup) {
-    appendLog('ERR', 'Popup was blocked by browser', { userUrl });
+  try {
+    walletPopup.open(userUrl);
+  } catch (err) {
+    appendLog('ERR', 'Popup was blocked by browser', { userUrl, reason: normalizeError(err).message });
+  }
+}
+
+function isSafariBrowser(): boolean {
+  const userAgent = navigator.userAgent;
+  const vendor = navigator.vendor || '';
+  return (
+    /Safari/i.test(userAgent)
+    && /Apple/i.test(vendor)
+    && !/(Chrome|Chromium|CriOS|FxiOS|Edg|EdgiOS|OPR|OPiOS|Android)/i.test(userAgent)
+  );
+}
+
+function isMacOSSafariBrowser(): boolean {
+  const userAgent = navigator.userAgent;
+  const platform = navigator.platform || '';
+  const isIPadOSDesktopMode = platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+  return isSafariBrowser() && !isIPadOSDesktopMode && (/Mac/i.test(platform) || /Mac OS X/i.test(userAgent));
+}
+
+function shouldPrimeWalletPopupForSafari(): boolean {
+  const discovery = loadKernelDiscoveryState();
+  const activeRemoteGatewayUrl = discovery?.walletType === 'remote' ? asString(discovery.url) : '';
+  return isMacOSSafariBrowser() && Boolean(els.remoteUrl.value.trim() || activeRemoteGatewayUrl);
+}
+
+function primeWalletPopupForSafari(action: string): void {
+  if (!shouldPrimeWalletPopupForSafari()) return;
+
+  try {
+    const popupWindow = walletPopup.open('about:blank');
+    try {
+      popupWindow.document.title = 'Canton Wallet';
+      popupWindow.document.body.innerHTML =
+        '<div style="font-family: system-ui, sans-serif; padding: 16px;">Continue in the wallet window.</div>';
+    } catch {
+      // Existing wallet windows can be cross-origin until the SDK navigates them.
+    }
+    appendLog('INFO', `${action} -> wallet popup primed for Safari`);
+  } catch (err) {
+    appendLog('INFO', `${action} -> Safari popup prime skipped`, { reason: normalizeError(err).message });
+  }
+}
+
+function shouldUseSafariDirectRemoteConnect(): boolean {
+  return isMacOSSafariBrowser() && Boolean(els.remoteUrl.value.trim());
+}
+
+function setSDKSingletonClientForSafariRemote(client: DappClient | null): void {
+  // 2026-04-24: SDK 1.0.0/1.1.0 has no supported direct-remote connect API
+  // that both bypasses the picker and preserves module-level helpers like
+  // status(), listAccounts(), and open(). Keep this isolated so it can be
+  // removed when upstream exposes a public equivalent.
+  (dappSDK as unknown as DappSDKWithInternalClient).client = client;
+}
+
+async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
+  const preferredGatewayUrl = els.remoteUrl.value.trim();
+  if (!preferredGatewayUrl) {
+    throw new Error('Remote wallet gateway URL is required for Safari remote connect.');
+  }
+
+  const parsedPreferredGatewayUrl = parseUrl(preferredGatewayUrl);
+  if (!parsedPreferredGatewayUrl) {
+    throw new Error('Preferred wallet gateway URL must be an absolute URL.');
+  }
+
+  const rpcUrl = parsedPreferredGatewayUrl.toString();
+  clearPersistedWalletSessionState();
+
+  const adapter = new RemoteAdapter({
+    name: buildRemotePickerEntryLabel(rpcUrl),
+    rpcUrl,
+  });
+  appendLog('INFO', 'connect -> Safari direct remote gateway', { rpcUrl });
+  const provider = adapter.provider();
+  const client = new DappClient(provider, { providerType: 'remote' });
+  setSDKSingletonClientForSafariRemote(client);
+
+  try {
+    const result = await client.connect();
+    if (result.isConnected) {
+      localStorage.setItem(KERNEL_DISCOVERY_KEY, JSON.stringify({ walletType: 'remote', url: rpcUrl }));
+    }
+    return result;
+  } catch (err) {
+    setSDKSingletonClientForSafariRemote(null);
+    clearPersistedWalletSessionState();
+    try {
+      walletPopup.close();
+    } catch {
+      // Best-effort cleanup for the synchronously reserved Safari popup.
+    }
+    throw err;
   }
 }
 
@@ -2816,6 +2919,9 @@ els.transferAsset.addEventListener('change', () => {
 });
 
 els.openWallet.addEventListener('click', () => {
+  if (getCurrentProviderKind() === 'remote') {
+    primeWalletPopupForSafari('open');
+  }
   void run('open', async () => {
     ensureProvider();
     await open();
@@ -2824,11 +2930,17 @@ els.openWallet.addEventListener('click', () => {
 });
 
 els.connect.addEventListener('click', () => {
+  const useSafariDirectRemoteConnect = shouldUseSafariDirectRemoteConnect();
+  if (useSafariDirectRemoteConnect) {
+    primeWalletPopupForSafari('connect');
+  }
   void run('connect', async () => {
-    if (getCurrentProviderKind() === 'remote') {
+    if (getCurrentProviderKind() === 'remote' || useSafariDirectRemoteConnect) {
       (window as Window & { canton?: RequestingProvider }).canton = undefined;
     }
-    const result = await connect(buildPickerConnectOptions());
+    const result = useSafariDirectRemoteConnect
+      ? await connectSafariRemoteDirect()
+      : await connect(buildPickerConnectOptions());
     const p = ensureProvider();
     eventsSubscribed = false;
     resetTransferFactoryDiscoveryUI();
@@ -2838,7 +2950,8 @@ els.connect.addEventListener('click', () => {
     appendLog('INFO', 'connect -> active account', accountSummary);
     return {
       ...(asObject(result) ?? {}),
-      picker: true,
+      picker: !useSafariDirectRemoteConnect,
+      connectFlow: useSafariDirectRemoteConnect ? 'safari-direct-remote' : 'sdk-picker',
       preferredGateway: els.remoteUrl.value.trim() || undefined,
       activePartyId: accountSummary.primaryAccount.partyId,
       accountCount: accountSummary.accountCount,
@@ -2851,6 +2964,7 @@ els.disconnect.addEventListener('click', () => {
     try {
       return await disconnect();
     } finally {
+      setSDKSingletonClientForSafariRemote(null);
       clearPersistedWalletSessionState();
       eventsSubscribed = false;
       resetTransferFactoryDiscoveryUI();
@@ -2887,6 +3001,9 @@ els.getPrimaryAccount.addEventListener('click', () => {
 });
 
 els.signMessage.addEventListener('click', () => {
+  if (getCurrentProviderKind() === 'remote') {
+    primeWalletPopupForSafari('signMessage');
+  }
   void run('signMessage', async () => {
     const provider = ensureProvider();
     const message = els.message.value;
@@ -2965,6 +3082,9 @@ els.prefillTransferCommand.addEventListener('click', () => {
 });
 
 els.prepareExecute.addEventListener('click', () => {
+  if (getCurrentProviderKind() === 'remote') {
+    primeWalletPopupForSafari('prepareExecute');
+  }
   void run('prepareExecute', async () => {
     const p = ensureProvider();
     const params = parseCommandParamsInput();
@@ -2987,6 +3107,9 @@ els.prepareExecute.addEventListener('click', () => {
 });
 
 els.prepareExecuteAndWait.addEventListener('click', () => {
+  if (getCurrentProviderKind() === 'remote') {
+    primeWalletPopupForSafari('prepareExecuteAndWait');
+  }
   void run('prepareExecuteAndWait', async () => {
     const p = ensureProvider();
     const params = parseCommandParamsInput();
