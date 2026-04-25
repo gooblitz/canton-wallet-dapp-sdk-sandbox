@@ -5,7 +5,7 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 ## What this tests
 
 - SDK wallet picker flow (`@canton-network/dapp-sdk@^1.1.0`)
-- DevNet and TestNet transfer presets for supported assets
+- DevNet, TestNet, and MainNet transfer presets for supported assets
 - `connect`, `disconnect`, `status`, `listAccounts`
 - `getPrimaryAccount` via provider request
 - `signMessage` via provider request for extension, or direct remote JSON-RPC bridge for remote gateways when remote approval details need to be surfaced in the sandbox
@@ -25,20 +25,27 @@ Optional dApp env for registry discovery:
 
 ```bash
 VITE_NETWORK='devnet'
-VITE_WALLET_RPC_URLS_JSON='{"devnet":"https://lat-dn.cddev.site/api/v1/dapp","testnet":"https://lat-tn.cddev.site/api/v1/dapp"}'
+VITE_WALLET_RPC_URLS_JSON='{"devnet":"https://lat-dn.cddev.site/api/v1/dapp","testnet":"https://lat-tn.cddev.site/api/v1/dapp","mainnet":"https://lat-mn.cddev.site/api/v1/dapp"}'
 VITE_TESTNET_WALLET_RPC_URL='https://lat-tn.cddev.site/api/v1/dapp'
+VITE_MAINNET_WALLET_RPC_URL='https://lat-mn.cddev.site/api/v1/dapp'
 VITE_REGISTRY_DOMAIN='https://sp-lat-dn.cddev.site' # default domain used by "Registry Domain (Default)"
 VITE_TESTNET_REGISTRY_DOMAIN='https://sp-lat-tn.cddev.site'
+VITE_MAINNET_REGISTRY_DOMAIN='https://sp-lat-mn.cddev.site'
 VITE_TESTNET_REGISTRY_URL='/api/registry-proxy/testnet'
-VITE_REGISTRY_URLS_JSON='{"devnet":"/api/registry-proxy","testnet":"/api/registry-proxy/testnet"}'
-VITE_TOKEN_REGISTRY_URLS_JSON='{"testnet:USDCx":"/api/token-standard/testnet/registrars/decentralized-usdc-interchain-rep%3A%3A122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61"}'
+VITE_MAINNET_REGISTRY_URL='/api/registry-proxy/mainnet'
+VITE_MAINNET_DSO_ADMIN='' # optional override for the built-in MainNet Amulet/CC admin
+VITE_REGISTRY_URLS_JSON='{"devnet":"/api/registry-proxy","testnet":"/api/registry-proxy/testnet","mainnet":"/api/registry-proxy/mainnet"}'
+VITE_TOKEN_REGISTRY_URLS_JSON='{"testnet:USDCx":"/api/token-standard/testnet/registrars/decentralized-usdc-interchain-rep%3A%3A122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61","mainnet:USDCx":"/api/token-standard/mainnet/registrars/decentralized-usdc-interchain-rep%3A%3A12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef"}'
 VITE_TOKEN_REGISTRY_URL='/api/registry-proxy' # recommended default
 VITE_SCAN_URL='/api/registry-proxy'           # recommended default
 VITE_HOLDINGS_DIAGNOSTICS='false'
 SCAN_PROXY_BACKEND_URL='https://sp-lat-dn.cddev.site' # DevNet scan-proxy upstream target
 TESTNET_SCAN_PROXY_BACKEND_URL='https://sp-lat-tn.cddev.site' # TestNet scan-proxy upstream target
+MAINNET_SCAN_PROXY_BACKEND_URL='https://sp-lat-mn.cddev.site' # MainNet scan-proxy upstream target
 UTILITIES_TOKEN_STANDARD_TESTNET_URL='https://api.utilities.digitalasset-staging.com/api/token-standard/v0'
+UTILITIES_TOKEN_STANDARD_MAINNET_URL='https://api.utilities.digitalasset.com/api/token-standard/v0'
 UTILITIES_INSTRUMENT_CONFIG_TESTNET_URL='https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all'
+UTILITIES_INSTRUMENT_CONFIG_MAINNET_URL='https://api.utilities.digitalasset.com/api/utilities/v0/contract/instrument-configuration/all'
 # Optional upstream auth header:
 # SCAN_PROXY_UPSTREAM_AUTH='Bearer <token>'
 ```
@@ -96,10 +103,14 @@ Open: `http://127.0.0.1:4174`
   - `VITE_TOKEN_REGISTRY_URL=/api/registry-proxy`
   - `VITE_SCAN_URL=/api/registry-proxy`
   - `SCAN_PROXY_BACKEND_URL=https://sp-lat-dn.cddev.site`
-- TestNet has built-in transfer presets for CC and USDCx. The default TestNet wallet gateway is `https://lat-tn.cddev.site/api/v1/dapp`.
+- TestNet and MainNet have built-in transfer presets for CC and USDCx. The default TestNet wallet gateway is `https://lat-tn.cddev.site/api/v1/dapp`; the default MainNet wallet gateway is `https://lat-mn.cddev.site/api/v1/dapp`.
 - The default TestNet registry / scan-proxy target is `https://sp-lat-tn.cddev.site`.
-- USDCx uses the utilities token-standard registrar route under `/api/token-standard/testnet/registrars/<USDCx-admin>`.
-- The utilities TestNet instrument configuration catalog is `https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all`; it is useful for asset discovery/metadata checks, but it is not the per-asset transfer-factory registry endpoint.
+- The default MainNet registry / scan-proxy target is `https://sp-lat-mn.cddev.site`.
+- USDCx uses the utilities token-standard registrar route under `/api/token-standard/<network>/registrars/<USDCx-admin>`.
+- The utilities instrument configuration catalogs are `https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all` for TestNet and `https://api.utilities.digitalasset.com/api/utilities/v0/contract/instrument-configuration/all` for MainNet; they are useful for asset discovery/metadata checks, but they are not the per-asset transfer-factory registry endpoint.
+- MainNet CC currently defaults to admin `DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc`.
+- MainNet USDCx currently defaults to registrar `decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef`.
+- MainNet CC uses `/api/registry-proxy/mainnet`. Set `VITE_MAINNET_DSO_ADMIN` only when overriding the built-in Amulet/CC admin. Do not infer Amulet from unrelated MainNet catalog entries that happen to use ticker `CC`; the public catalog currently confirms USDCx, but not a `DSO::...` Amulet registrar.
 - The normal connect flow initializes the SDK picker with `init()` before `connect()`, matching the SDK 1.1.0 adapter-registration API. The configured gateway URL in Settings is only used to seed that picker; the active remote session may come from a different picker entry.
 - SDK 1.1.0 adds `WalletConnectAdapter`. This sandbox installs the optional WalletConnect peer packages because Vite dev optimization of SDK 1.1.0 imports that code path, but it does not register the adapter yet. Enabling WalletConnect should be a separate change with a configured WalletConnect project ID and wallet-side approval testing.
 - The UI now separates wallet/gateway identity from account identity: the picker entry identifies the wallet source, while the page shows the resolved connected party/account after `connect()`.
@@ -123,9 +134,10 @@ Open: `http://127.0.0.1:4174`
   - If upstream expects bearer auth too, set `SCAN_PROXY_UPSTREAM_AUTH`.
   - Restart `npm run dev` after env changes.
 - `discoverTransferFactory -> Registry fetch failed at network layer`
-  - Ensure `/api/registry-proxy` and `/api/token-standard/testnet` are available (run `npm run dev`).
+  - Ensure `/api/registry-proxy` and `/api/token-standard/<network>` are available (run `npm run dev`).
   - Ensure `SCAN_PROXY_BACKEND_URL` is reachable for DevNet (default `https://sp-lat-dn.cddev.site`).
   - For TestNet CC, ensure `TESTNET_SCAN_PROXY_BACKEND_URL` is reachable (default `https://sp-lat-tn.cddev.site`).
+  - For MainNet CC, ensure `MAINNET_SCAN_PROXY_BACKEND_URL` is reachable (default `https://sp-lat-mn.cddev.site`).
   - Verify your API key is present and valid.
 - `TEMPLATES_OR_INTERFACES_NOT_FOUND` with `pkg:Module:Template`
   - `commands JSON` still has the placeholder command.

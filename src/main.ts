@@ -88,6 +88,9 @@ type ResolvedTransferContext = {
   registryUrl: string;
   factoryId: string;
   transferKind?: string;
+  instrumentId: string;
+  instrumentAdmin: string;
+  expectedAdmin: string;
   inputHoldingCids: string[];
   choiceContextData: Record<string, unknown>;
   disclosedContracts: Record<string, unknown>[];
@@ -233,8 +236,10 @@ const layoutEls = {
 
 const DEFAULT_WALLET_DOMAIN = 'https://lat-dn.cddev.site';
 const DEFAULT_TESTNET_WALLET_DOMAIN = 'https://lat-tn.cddev.site';
+const DEFAULT_MAINNET_WALLET_DOMAIN = 'https://lat-mn.cddev.site';
 const DEFAULT_DEVNET_REGISTRY_DOMAIN = 'https://sp-lat-dn.cddev.site';
 const DEFAULT_TESTNET_REGISTRY_DOMAIN = 'https://sp-lat-tn.cddev.site';
+const DEFAULT_MAINNET_REGISTRY_DOMAIN = 'https://sp-lat-mn.cddev.site';
 const DEFAULT_REGISTRY_PROXY_BASE_PATH = '/api/registry-proxy';
 const DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH = '/api/token-standard';
 const DEFAULT_NETWORK_ID = 'devnet';
@@ -243,6 +248,11 @@ const TESTNET_DSO_ADMIN =
   'DSO::1220f22a8b8f2d813c25b9a684dc4dd52b532a0174d8e73a13cdf2baabfff7518337';
 const TESTNET_USDCX_ADMIN =
   'decentralized-usdc-interchain-rep::122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61';
+const DEFAULT_MAINNET_DSO_ADMIN =
+  'DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc';
+const MAINNET_DSO_ADMIN = import.meta.env.VITE_MAINNET_DSO_ADMIN?.toString().trim() || DEFAULT_MAINNET_DSO_ADMIN;
+const MAINNET_USDCX_ADMIN =
+  'decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef';
 const DOMAIN_SETTINGS_STORAGE_KEY = 'local_dapp_domain_settings_v1';
 const NETWORK_ID_STORAGE_KEY = 'local_dapp_network_id_v1';
 const REGISTRY_URLS_STORAGE_KEY = 'local_dapp_registry_urls_v1';
@@ -461,7 +471,10 @@ function normalizeDomainValue(raw: string, fallback: string): string {
 
 function normalizeNetworkId(raw: string): string {
   const networkId = raw.trim().toLowerCase();
-  return networkId === 'testnet' ? 'testnet' : DEFAULT_NETWORK_ID;
+  if (networkId === 'testnet' || networkId === 'mainnet') {
+    return networkId;
+  }
+  return DEFAULT_NETWORK_ID;
 }
 
 function buildNetworkPresets(): Record<string, NetworkPreset> {
@@ -484,6 +497,26 @@ function buildNetworkPresets(): Record<string, NetworkPreset> {
     || joinUrl(
       `${DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH}/testnet`,
       `/registrars/${encodeURIComponent(TESTNET_USDCX_ADMIN)}`,
+    );
+  const mainnetWalletDomain = normalizeDomainValue(
+    import.meta.env.VITE_MAINNET_WALLET_DOMAIN?.toString().trim() || DEFAULT_MAINNET_WALLET_DOMAIN,
+    DEFAULT_MAINNET_WALLET_DOMAIN,
+  );
+  const mainnetRegistryUrl =
+    import.meta.env.VITE_MAINNET_REGISTRY_URL?.toString().trim()
+    || import.meta.env.VITE_MAINNET_TOKEN_REGISTRY_URL?.toString().trim()
+    || ENV_REGISTRY_URLS.mainnet
+    || `${DEFAULT_REGISTRY_PROXY_BASE_PATH}/mainnet`;
+  const mainnetScanUrl =
+    import.meta.env.VITE_MAINNET_SCAN_URL?.toString().trim()
+    || mainnetRegistryUrl;
+  const mainnetUsdcxRegistryUrl =
+    import.meta.env.VITE_MAINNET_USDCX_REGISTRY_URL?.toString().trim()
+    || ENV_TOKEN_REGISTRY_URLS['mainnet:USDCx']
+    || ENV_TOKEN_REGISTRY_URLS['mainnet:usdcx']
+    || joinUrl(
+      `${DEFAULT_TOKEN_STANDARD_PROXY_BASE_PATH}/mainnet`,
+      `/registrars/${encodeURIComponent(MAINNET_USDCX_ADMIN)}`,
     );
 
   return {
@@ -536,6 +569,36 @@ function buildNetworkPresets(): Record<string, NetworkPreset> {
         },
       ],
     },
+    mainnet: {
+      networkId: 'mainnet',
+      label: 'MainNet',
+      walletDomain: mainnetWalletDomain,
+      registryDomain: import.meta.env.VITE_MAINNET_REGISTRY_DOMAIN?.toString().trim()
+        ? normalizeDomainValue(import.meta.env.VITE_MAINNET_REGISTRY_DOMAIN.toString().trim(), DEFAULT_MAINNET_REGISTRY_DOMAIN)
+        : DEFAULT_MAINNET_REGISTRY_DOMAIN,
+      scanUrl: mainnetScanUrl,
+      defaultRegistryUrl: mainnetRegistryUrl,
+      assets: [
+        {
+          assetId: 'CC',
+          label: 'CC (Amulet)',
+          symbol: 'CC',
+          instrumentId: 'Amulet',
+          instrumentAdmin: MAINNET_DSO_ADMIN,
+          expectedAdmin: MAINNET_DSO_ADMIN,
+          registryUrl: mainnetRegistryUrl,
+        },
+        {
+          assetId: 'USDCx',
+          label: 'USDCx',
+          symbol: 'USDCx',
+          instrumentId: 'USDCx',
+          instrumentAdmin: MAINNET_USDCX_ADMIN,
+          expectedAdmin: MAINNET_USDCX_ADMIN,
+          registryUrl: mainnetUsdcxRegistryUrl,
+        },
+      ],
+    },
   };
 }
 
@@ -553,6 +616,9 @@ function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): str
     ENV_WALLET_RPC_URLS[normalizedNetworkId]
     || (normalizedNetworkId === 'testnet'
       ? import.meta.env.VITE_TESTNET_WALLET_RPC_URL?.toString().trim()
+      : '')
+    || (normalizedNetworkId === 'mainnet'
+      ? import.meta.env.VITE_MAINNET_WALLET_RPC_URL?.toString().trim()
       : '')
     || (normalizedNetworkId === DEFAULT_NETWORK_ID
       ? import.meta.env.VITE_WALLET_RPC_URL?.toString().trim()
@@ -2028,6 +2094,12 @@ function applyResolvedTransferContext(result: ResolvedTransferContext): void {
   if (!els.transferFactoryManualOverride.checked) {
     els.transferFactoryContractId.value = result.factoryId;
   }
+  if (!els.transferInstrumentAdmin.value.trim()) {
+    els.transferInstrumentAdmin.value = result.instrumentAdmin;
+  }
+  if (!els.transferExpectedAdmin.value.trim()) {
+    els.transferExpectedAdmin.value = result.expectedAdmin;
+  }
   els.transferContextJson.value = JSON.stringify(result.choiceContextData, null, 2);
   els.transferDisclosedJson.value = JSON.stringify(result.disclosedContracts, null, 2);
   setTransferFactoryStatus(
@@ -2044,6 +2116,9 @@ function transferContextSummary(result: ResolvedTransferContext): Record<string,
     registryUrl: result.registryUrl,
     transferFactoryContractId: result.factoryId,
     transferKind: result.transferKind || 'unknown',
+    instrumentId: result.instrumentId,
+    instrumentAdmin: result.instrumentAdmin,
+    expectedAdmin: result.expectedAdmin,
     inputHoldingCidsCount: result.inputHoldingCids.length,
     disclosedContractsCount: result.disclosedContracts.length,
   };
@@ -2200,7 +2275,7 @@ async function fetchRegistryAdminId(registryUrl: string): Promise<string> {
     const message = err instanceof Error ? err.message : String(err);
     if (message.toLowerCase().includes('failed to fetch')) {
       throw new Error(
-        `Registry fetch failed at network layer for ${endpoint}. Ensure /api/registry-proxy is active and SCAN_PROXY_BACKEND_URL is reachable (default https://sp-lat-dn.cddev.site).`,
+        `Registry fetch failed at network layer for ${endpoint}. Ensure /api/registry-proxy is active and the network-specific scan proxy backend is reachable.`,
       );
     }
     throw err;
@@ -2280,15 +2355,6 @@ async function resolveTransferFactoryContext(
   const partyId = await getPrimaryAccountPartyId(p);
   const senderPartyId = partyId;
   const requestedInstrumentAdmin = transferInput.instrumentAdmin || transferInput.expectedAdmin || '';
-  const inputHoldingCids =
-    transferInput.inputHoldingCids.length > 0
-      ? uniqueStrings(transferInput.inputHoldingCids)
-      : await getPrimaryHoldingContractIds(
-        p,
-        senderPartyId,
-        transferInput.instrumentId,
-        requestedInstrumentAdmin,
-      );
   const { registryUrl } = await resolveRegistryUrl(networkId, requestedInstrumentAdmin, transferInput.instrumentId);
 
   let expectedAdmin = transferInput.expectedAdmin || '';
@@ -2309,6 +2375,16 @@ async function resolveTransferFactoryContext(
     throw new Error('Could not resolve expected admin/instrument admin from input or registry info.');
   }
 
+  const inputHoldingCids =
+    transferInput.inputHoldingCids.length > 0
+      ? uniqueStrings(transferInput.inputHoldingCids)
+      : await getPrimaryHoldingContractIds(
+        p,
+        senderPartyId,
+        transferInput.instrumentId,
+        instrumentAdmin,
+      );
+
   const cacheKey = transferContextCacheKey(
     networkId,
     partyId,
@@ -2327,6 +2403,9 @@ async function resolveTransferFactoryContext(
         ...cached,
         inputHoldingCids,
         source: 'cache',
+        instrumentId: cached.instrumentId || transferInput.instrumentId,
+        instrumentAdmin: cached.instrumentAdmin || instrumentAdmin,
+        expectedAdmin: cached.expectedAdmin || expectedAdmin,
       };
       applyResolvedTransferContext(cacheResult);
       return cacheResult;
@@ -2349,6 +2428,9 @@ async function resolveTransferFactoryContext(
     registryUrl,
     factoryId: registryResult.factoryId,
     ...(registryResult.transferKind ? { transferKind: registryResult.transferKind } : {}),
+    instrumentId: transferInput.instrumentId,
+    instrumentAdmin,
+    expectedAdmin,
     inputHoldingCids,
     choiceContextData: registryResult.context.choiceContextData,
     disclosedContracts: registryResult.context.disclosedContracts,
@@ -2724,6 +2806,8 @@ async function maybeRefreshTransferFactoryAfterFailure(
   const resolved = await resolveTransferFactoryContext(p, transferInput, true);
   const payload = buildTransferPrepareExecutePayload(senderPartyId, {
     ...transferInput,
+    instrumentAdmin: resolved.instrumentAdmin,
+    expectedAdmin: resolved.expectedAdmin,
     inputHoldingCids: resolved.inputHoldingCids,
     contextData: resolved.choiceContextData,
     disclosedContracts: resolved.disclosedContracts,
@@ -3050,20 +3134,23 @@ els.prefillTransferCommand.addEventListener('click', () => {
     const p = ensureProvider();
     const senderPartyId = await getPrimaryAccountPartyId(p);
     const transferInput = parseTransferHelperInput();
-    transferInput.inputHoldingCids = await getPrimaryHoldingContractIds(
-      p,
-      senderPartyId,
-      transferInput.instrumentId,
-      transferInput.instrumentAdmin || transferInput.expectedAdmin || '',
-    );
     let resolved: ResolvedTransferContext | null = null;
 
     if (!els.transferFactoryManualOverride.checked) {
       resolved = await resolveTransferFactoryContext(p, transferInput, false);
       transferInput.factoryContractId = resolved.factoryId;
+      transferInput.instrumentAdmin = resolved.instrumentAdmin;
+      transferInput.expectedAdmin = resolved.expectedAdmin;
       transferInput.inputHoldingCids = resolved.inputHoldingCids;
       transferInput.contextData = resolved.choiceContextData;
       transferInput.disclosedContracts = resolved.disclosedContracts;
+    } else {
+      transferInput.inputHoldingCids = await getPrimaryHoldingContractIds(
+        p,
+        senderPartyId,
+        transferInput.instrumentId,
+        transferInput.instrumentAdmin || transferInput.expectedAdmin || '',
+      );
     }
 
     const transferFactoryContractId = transferInput.factoryContractId;

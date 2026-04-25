@@ -5,7 +5,7 @@
 Use a wallet-agnostic transfer prefill flow based on Token Standard registry APIs.
 
 This is intentionally separate from wallet connection UX. The sandbox now connects wallets through the
-`@canton-network/dapp-sdk@^1.0.0` picker flow, then uses the connected provider for account and submit calls.
+`@canton-network/dapp-sdk@^1.1.0` picker flow, then uses the connected provider for account and submit calls.
 
 ## Current Flow
 
@@ -37,12 +37,14 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
    - env `VITE_REGISTRY_URLS_JSON`
    - env `VITE_TOKEN_REGISTRY_URL` (DevNet fallback)
    - env `VITE_TESTNET_REGISTRY_URL` (TestNet CC / scan-proxy fallback)
+   - env `VITE_MAINNET_REGISTRY_URL` (MainNet CC / scan-proxy fallback)
    - configured values may be relative proxy paths or absolute URLs
 3. Asset config:
    - selected asset preset registry URL
    - env `VITE_TOKEN_REGISTRY_URLS_JSON`, keyed by values such as `testnet:USDCx`
    - env `VITE_TESTNET_USDCX_REGISTRY_URL`
-   - defaults to `/api/token-standard/testnet/registrars/<USDCx-admin>` for TestNet USDCx
+   - env `VITE_MAINNET_USDCX_REGISTRY_URL`
+   - defaults to `/api/token-standard/<network>/registrars/<USDCx-admin>` for TestNet/MainNet USDCx
 4. CNS fallback (if `Scan URL` + instrument admin are available):
    - proxy-style base path: `GET {scanUrl}/ans-entries/by-party/{adminParty}`
    - direct scan base path: `GET {scanUrl}/v0/ans-entries/by-party/{adminParty}`
@@ -54,9 +56,12 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
 
 - TestNet catalog endpoint:
   - `GET https://api.utilities.digitalasset-staging.com/api/utilities/v0/contract/instrument-configuration/all`
+- MainNet catalog endpoint:
+  - `GET https://api.utilities.digitalasset.com/api/utilities/v0/contract/instrument-configuration/all`
 - The catalog returns global utilities instrument configuration data such as registrar, provider, default identifier, additional identifiers, and issuer/holder requirements.
 - Use it for discovery, verification, and metadata checks.
-- Do not use it as the transfer-factory registry base. Transfer context still comes from a per-asset registry URL such as `/api/registry-proxy/testnet` or `/api/token-standard/testnet/registrars/<admin>`.
+- As of 2026-04-25, authenticated MainNet scan-proxy metadata confirms the Amulet/CC admin `DSO::1220b1431ef217342db44d516bb9befde802be7d8899637d290895fa58880f19accc`. The public MainNet catalog confirms the USDCx registrar but does not publish that `DSO::...` Amulet registrar entry. Treat unrelated ticker `CC` catalog entries as separate instruments, not Canton Coin.
+- Do not use it as the transfer-factory registry base. Transfer context still comes from a per-asset registry URL such as `/api/registry-proxy/testnet`, `/api/registry-proxy/mainnet`, or `/api/token-standard/<network>/registrars/<admin>`.
 
 ## Caching
 

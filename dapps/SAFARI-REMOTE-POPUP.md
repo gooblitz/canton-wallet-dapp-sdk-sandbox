@@ -56,6 +56,7 @@ Manual Safari retest:
 
 - Connect to DevNet remote gateway.
 - Connect to TestNet remote gateway.
+- Connect to MainNet remote gateway.
 - Run `open()`.
 - Run remote `signMessage`.
 - Run remote `prepareExecute` / approval flow.

@@ -15,6 +15,10 @@ export default defineConfig(({ mode }) => {
     env.TESTNET_SCAN_PROXY_BACKEND_URL
     || 'https://sp-lat-tn.cddev.site'
   ).trim();
+  const mainnetScanProxyBackendURL = (
+    env.MAINNET_SCAN_PROXY_BACKEND_URL
+    || 'https://sp-lat-mn.cddev.site'
+  ).trim();
   const utilitiesTokenStandardDevNetURL = splitProxyTarget(
     (env.UTILITIES_TOKEN_STANDARD_DEVNET_URL || 'https://api.utilities.digitalasset-dev.com/api/token-standard/v0').trim(),
   );
@@ -39,6 +43,18 @@ export default defineConfig(({ mode }) => {
           target: testnetScanProxyBackendURL,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/registry-proxy\/testnet/, '/v0/scan-proxy'),
+          ...(upstreamAuthHeader.length > 0
+            ? {
+                headers: {
+                  Authorization: upstreamAuthHeader,
+                },
+              }
+            : {}),
+        },
+        '/api/registry-proxy/mainnet': {
+          target: mainnetScanProxyBackendURL,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/registry-proxy\/mainnet/, '/v0/scan-proxy'),
           ...(upstreamAuthHeader.length > 0
             ? {
                 headers: {
