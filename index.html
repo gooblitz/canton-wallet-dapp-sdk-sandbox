@@ -9,11 +9,98 @@
     <main class="app">
       <header>
         <h1>Canton dApp SDK Sandbox</h1>
-        <p>Quick local dApp for testing the picker-based Canton wallet SDK flow against extension or remote gateways.</p>
+        <p>Quick local dApp for testing Canton wallet SDK flows against extension or remote gateways.</p>
       </header>
 
       <section class="workspace">
         <div class="left-pane">
+          <section class="card">
+            <h2>Launch Links</h2>
+            <details class="advanced" id="walletIntentLinks" open>
+              <summary>walletIntent URL Generator</summary>
+              <form id="walletIntentForm" class="wallet-intent-form">
+                <label>
+                  Target dApp URL
+                  <input id="walletIntentTargetUrl" type="text" />
+                </label>
+                <div class="form-grid two">
+                  <label>
+                    Request ID
+                    <input id="walletIntentRequestId" type="text" />
+                  </label>
+                  <label>
+                    Audience Origin
+                    <input id="walletIntentAudience" type="text" />
+                  </label>
+                </div>
+                <div class="form-grid two">
+                  <label>
+                    Issued At
+                    <input id="walletIntentIssuedAt" type="text" />
+                  </label>
+                  <label>
+                    Expires At
+                    <input id="walletIntentExpiresAt" type="text" />
+                  </label>
+                </div>
+                <div class="form-grid two">
+                  <label>
+                    Network
+                    <select id="walletIntentNetwork">
+                      <option value="devnet">DevNet</option>
+                      <option value="testnet">TestNet</option>
+                      <option value="mainnet">MainNet</option>
+                    </select>
+                  </label>
+                  <label>
+                    Connection Mode
+                    <select id="walletIntentMode">
+                      <option value="picker">Picker</option>
+                      <option value="direct-remote">Direct remote gateway</option>
+                    </select>
+                  </label>
+                </div>
+                <label>
+                  Gateway Label
+                  <input id="walletIntentRemoteName" type="text" />
+                </label>
+                <label>
+                  Gateway URL
+                  <input id="walletIntentRemoteUrl" type="text" />
+                </label>
+                <div class="form-grid two">
+                  <label>
+                    Reconciliation commandId
+                    <input id="walletIntentCommandId" type="text" />
+                  </label>
+                  <label>
+                    Transfer meta
+                    <input id="walletIntentTransferMeta" type="text" />
+                  </label>
+                </div>
+                <div class="row wrap">
+                  <button id="syncWalletIntentFromSettings" class="text-link-button" type="button">
+                    Use Current Settings
+                  </button>
+                </div>
+              </form>
+              <label>
+                walletIntent URL
+                <textarea id="walletIntentUrl" class="launch-link-output" rows="3" readonly></textarea>
+              </label>
+              <label>
+                Payload
+                <textarea id="walletIntentPayload" rows="14" readonly></textarea>
+              </label>
+              <div class="row wrap">
+                <button id="copyWalletIntentUrl" type="button">Copy URL</button>
+                <button id="openWalletIntentUrl" type="button">Open</button>
+                <button id="copyWalletIntentPayload" type="button">Copy Payload</button>
+              </div>
+              <p id="walletIntentLinkStatus" class="hint"></p>
+            </details>
+          </section>
+
           <section class="card">
             <h2>Settings</h2>
             <label>
@@ -22,6 +109,13 @@
                 <option value="devnet">DevNet</option>
                 <option value="testnet">TestNet</option>
                 <option value="mainnet">MainNet</option>
+              </select>
+            </label>
+            <label>
+              Connection Mode
+              <select id="connectionMode">
+                <option value="picker">Picker</option>
+                <option value="direct-remote">Direct remote gateway</option>
               </select>
             </label>
             <label>
@@ -37,12 +131,13 @@
               <input id="registryApiKey" type="text" placeholder="x-api-key value" />
             </label>
             <label>
-              Preferred Wallet Gateway URL (shown in picker)
+              Preferred Wallet Gateway URL
               <input id="remoteUrl" type="text" />
             </label>
+            <p id="launchIntentStatus" class="hint hidden"></p>
             <p class="hint">
-              connect() opens the SDK wallet picker with Browser Extension plus this configured gateway. The picker
-              identifies the wallet/gateway; the active party/account is shown after connect.
+              Picker mode opens the SDK wallet picker with Browser Extension plus this configured gateway. Direct mode
+              connects to the configured gateway without showing the picker.
             </p>
             <div class="identity-summary" aria-live="polite">
               <div class="identity-row">
@@ -56,14 +151,14 @@
               <p id="connectedAccountMeta" class="hint">Connect to resolve the active party/account identity.</p>
             </div>
             <div class="row">
-              <button id="openWallet">Open Connected Wallet UI</button>
+              <button id="openWallet" class="text-link-button">Open Connected Wallet UI</button>
             </div>
           </section>
 
           <section class="card">
             <h2>Actions</h2>
             <div class="row wrap">
-              <button id="connect">connect() via picker</button>
+              <button id="connect">connect()</button>
               <button id="disconnect">disconnect()</button>
               <button id="status">status()</button>
               <button id="listAccounts">listAccounts()</button>

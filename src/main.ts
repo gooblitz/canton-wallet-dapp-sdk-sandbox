@@ -51,6 +51,30 @@ type KernelDiscoveryState = {
   url?: string;
 };
 
+type ConnectionMode = 'picker' | 'direct-remote';
+
+type WalletLaunchIntent = {
+  source: 'hash' | 'query';
+  mode: ConnectionMode;
+  requestId?: string;
+  audience?: string;
+  issuedAt?: string;
+  expiresAt?: string;
+  networkId?: string;
+  remoteName?: string;
+  remoteRpcUrl?: string;
+  reconciliationCommandId?: string;
+  reconciliationTransferMeta?: string;
+};
+
+type WalletLaunchIntentParseResult = {
+  source?: 'hash' | 'query';
+  intent: WalletLaunchIntent | null;
+  rawPayload?: unknown;
+  rawText?: string;
+  errors: string[];
+};
+
 type JSONRPCErrorPayload = {
   code?: number;
   message?: string;
@@ -191,6 +215,27 @@ const els = {
   devnetRegistryDomain: qs<HTMLInputElement>('#devnetRegistryDomain'),
   registryApiKey: qs<HTMLInputElement>('#registryApiKey'),
   remoteUrl: qs<HTMLInputElement>('#remoteUrl'),
+  connectionMode: qs<HTMLSelectElement>('#connectionMode'),
+  launchIntentStatus: qs<HTMLParagraphElement>('#launchIntentStatus'),
+  walletIntentForm: qs<HTMLFormElement>('#walletIntentForm'),
+  walletIntentTargetUrl: qs<HTMLInputElement>('#walletIntentTargetUrl'),
+  walletIntentRequestId: qs<HTMLInputElement>('#walletIntentRequestId'),
+  walletIntentAudience: qs<HTMLInputElement>('#walletIntentAudience'),
+  walletIntentIssuedAt: qs<HTMLInputElement>('#walletIntentIssuedAt'),
+  walletIntentExpiresAt: qs<HTMLInputElement>('#walletIntentExpiresAt'),
+  walletIntentNetwork: qs<HTMLSelectElement>('#walletIntentNetwork'),
+  walletIntentMode: qs<HTMLSelectElement>('#walletIntentMode'),
+  walletIntentRemoteName: qs<HTMLInputElement>('#walletIntentRemoteName'),
+  walletIntentRemoteUrl: qs<HTMLInputElement>('#walletIntentRemoteUrl'),
+  walletIntentCommandId: qs<HTMLInputElement>('#walletIntentCommandId'),
+  walletIntentTransferMeta: qs<HTMLInputElement>('#walletIntentTransferMeta'),
+  syncWalletIntentFromSettings: qs<HTMLButtonElement>('#syncWalletIntentFromSettings'),
+  walletIntentUrl: qs<HTMLTextAreaElement>('#walletIntentUrl'),
+  walletIntentPayload: qs<HTMLTextAreaElement>('#walletIntentPayload'),
+  copyWalletIntentUrl: qs<HTMLButtonElement>('#copyWalletIntentUrl'),
+  openWalletIntentUrl: qs<HTMLButtonElement>('#openWalletIntentUrl'),
+  copyWalletIntentPayload: qs<HTMLButtonElement>('#copyWalletIntentPayload'),
+  walletIntentLinkStatus: qs<HTMLParagraphElement>('#walletIntentLinkStatus'),
   remotePickerLabel: qs<HTMLElement>('#remotePickerLabel'),
   connectedAccountLabel: qs<HTMLElement>('#connectedAccountLabel'),
   connectedAccountMeta: qs<HTMLParagraphElement>('#connectedAccountMeta'),
@@ -258,6 +303,12 @@ const NETWORK_ID_STORAGE_KEY = 'local_dapp_network_id_v1';
 const REGISTRY_URLS_STORAGE_KEY = 'local_dapp_registry_urls_v1';
 const REGISTRY_URLS_META_KEY = 'splice.lfdecentralizedtrust.org/registryUrls';
 const TRANSFER_CONTEXT_CACHE_STORAGE_KEY = 'local_dapp_transfer_context_cache_v1';
+const WALLET_LAUNCH_INTENT_KEY = 'walletIntent';
+const WALLET_LAUNCH_INTENT_TTL_MS = 10 * 60 * 1000;
+const WALLET_LAUNCH_INTENT_CLOCK_SKEW_MS = 5 * 60 * 1000;
+const RECONCILIATION_VALUE_MAX_LENGTH = 128;
+const RECONCILIATION_VALUE_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+const TRANSFER_META_RECONCILIATION_KEY = 'cddev.site/reconciliation-id';
 const TRANSFER_CONTEXT_CACHE_TTL_MS = 90 * 1000;
 const PLACEHOLDER_TEMPLATE_IDS = new Set(['pkg:Module:Template', '#pkg:Module:Template']);
 const ENV_NETWORK_ID = import.meta.env.VITE_NETWORK?.toString().trim() || DEFAULT_NETWORK_ID;
@@ -295,9 +346,11 @@ const ENV_SCAN_URL =
   import.meta.env.VITE_SCAN_URL?.toString().trim()
   || DEFAULT_REGISTRY_PROXY_BASE_PATH;
 const ENV_REGISTRY_API_KEY = import.meta.env.VITE_REGISTRY_API_KEY?.toString().trim() || '';
+const WALLET_LAUNCH_INTENT = parseWalletLaunchIntentFromLocation();
 const NETWORK_PRESETS = buildNetworkPresets();
 const initialNetworkId = normalizeNetworkId(
-  localStorage.getItem(NETWORK_ID_STORAGE_KEY)
+  WALLET_LAUNCH_INTENT.intent?.networkId
+    || localStorage.getItem(NETWORK_ID_STORAGE_KEY)
     || savedDomainSettings.networkId
     || ENV_NETWORK_ID,
 );
@@ -309,6 +362,7 @@ els.registryApiKey.value = ENV_REGISTRY_API_KEY;
 const defaultRemoteUrl =
   getConfiguredWalletRpcUrl(initialNetworkId, initialWalletDomain);
 els.remoteUrl.value = defaultRemoteUrl;
+els.connectionMode.value = 'picker';
 els.commandsJson.value = JSON.stringify(
   {
     commands: [
@@ -343,6 +397,12 @@ const MOBILE_LAYOUT_MEDIA_QUERY = '(max-width: 860px)';
 const MAX_LOG_ENTRIES = 400;
 
 const logEntries: string[] = [];
+let walletLaunchRemoteName = '';
+let walletLaunchRemoteRpcUrl = '';
+let walletIntentFormDirty = false;
+let walletIntentGeneratorLastNetworkId = '';
+let walletIntentGeneratorLastRequestId = '';
+let walletIntentGeneratorLastTargetOrigin = '';
 
 els.transferFactoryTemplateId.value = els.transferFactoryTemplateId.value.trim() || TRANSFER_FACTORY_TEMPLATE_ID;
 els.scanUrl.value = ENV_SCAN_URL;
@@ -357,6 +417,7 @@ if (!els.registryUrl.value.trim()) {
   }
 }
 applyNetworkPreset(initialNetworkId, false);
+applyWalletLaunchIntent(WALLET_LAUNCH_INTENT);
 
 function now(): string {
   return new Date().toISOString().replace('T', ' ').replace('Z', '');
@@ -475,6 +536,697 @@ function normalizeNetworkId(raw: string): string {
     return networkId;
   }
   return DEFAULT_NETWORK_ID;
+}
+
+function parseSupportedNetworkId(raw: string): string | null {
+  const networkId = raw.trim().toLowerCase();
+  if (networkId === 'devnet' || networkId === 'testnet' || networkId === 'mainnet') {
+    return networkId;
+  }
+  return null;
+}
+
+function normalizeConnectionMode(raw: string): ConnectionMode | null {
+  const mode = raw.trim().toLowerCase();
+  if (mode === 'picker') return 'picker';
+  if (mode === 'direct-remote') return 'direct-remote';
+  return null;
+}
+
+function parseReconciliationValue(raw: unknown, fieldLabel: string, errors: string[]): string {
+  if (raw === undefined || raw === null) return '';
+  if (typeof raw !== 'string') {
+    errors.push(`${fieldLabel} must be a string.`);
+    return '';
+  }
+
+  const value = raw.trim();
+  if (!value) return '';
+
+  if (value.length > RECONCILIATION_VALUE_MAX_LENGTH) {
+    errors.push(`${fieldLabel} must be at most ${RECONCILIATION_VALUE_MAX_LENGTH} characters.`);
+    return '';
+  }
+  if (!RECONCILIATION_VALUE_PATTERN.test(value)) {
+    errors.push(`${fieldLabel} must only contain letters, numbers, underscores, periods, colons, or hyphens.`);
+    return '';
+  }
+  return value;
+}
+
+function getSelectedConnectionMode(): ConnectionMode {
+  return normalizeConnectionMode(els.connectionMode.value) ?? 'picker';
+}
+
+function extractWalletLaunchIntentParam(): { source?: 'hash' | 'query'; value: string } {
+  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash;
+  const hashParams = new URLSearchParams(hash);
+  const fromHashParams = hashParams.get(WALLET_LAUNCH_INTENT_KEY)?.trim() || '';
+  if (fromHashParams) {
+    return { source: 'hash', value: fromHashParams };
+  }
+  if (hash.startsWith(`${WALLET_LAUNCH_INTENT_KEY}=`)) {
+    return { source: 'hash', value: hash.slice(WALLET_LAUNCH_INTENT_KEY.length + 1).trim() };
+  }
+
+  const fromQuery = new URLSearchParams(window.location.search).get(WALLET_LAUNCH_INTENT_KEY)?.trim() || '';
+  if (fromQuery && isLocalDevelopmentHost(window.location.hostname)) {
+    return { source: 'query', value: fromQuery };
+  }
+  if (fromQuery) {
+    return { source: 'query', value: '' };
+  }
+
+  return { value: '' };
+}
+
+function decodeWalletLaunchIntentValue(raw: string): string {
+  const urlDecoded = decodeURIComponent(raw.trim());
+  if (urlDecoded.startsWith('{')) {
+    return urlDecoded;
+  }
+
+  const normalizedBase64 = urlDecoded.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalizedBase64.padEnd(
+    normalizedBase64.length + ((4 - (normalizedBase64.length % 4)) % 4),
+    '=',
+  );
+  const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function base64UrlEncodeUtf8(raw: string): string {
+  const bytes = new TextEncoder().encode(raw);
+  let binary = '';
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+function isLocalDevelopmentHost(hostname: string): boolean {
+  return hostname === 'localhost'
+    || hostname === '127.0.0.1'
+    || hostname === '[::1]'
+    || hostname === '::1'
+    || hostname.endsWith('.localhost');
+}
+
+function isAllowedRemoteGatewayUrl(url: URL): boolean {
+  if (url.protocol === 'https:') {
+    return true;
+  }
+  if (url.protocol === 'http:' && isLocalDevelopmentHost(url.hostname)) {
+    return true;
+  }
+  return false;
+}
+
+function parseWalletLaunchRequestId(raw: unknown, errors: string[], required: boolean): string {
+  const value = asString(raw);
+  if (!value && required) {
+    errors.push('Wallet launch intent requestId is required.');
+    return '';
+  }
+  return parseReconciliationValue(value, 'Wallet launch intent requestId', errors);
+}
+
+function parseWalletLaunchAudience(raw: unknown, errors: string[], required: boolean): string {
+  const value = asString(raw);
+  if (!value) {
+    if (required) {
+      errors.push('Wallet launch intent aud is required.');
+    }
+    return '';
+  }
+
+  const parsedAudience = parseUrl(value);
+  if (!parsedAudience) {
+    errors.push('Wallet launch intent aud must be an absolute origin URL.');
+    return '';
+  }
+  if (parsedAudience.pathname !== '/' || parsedAudience.search || parsedAudience.hash) {
+    errors.push('Wallet launch intent aud must not include a path, query string, or fragment.');
+    return '';
+  }
+  if (!isAllowedDappTargetUrl(parsedAudience)) {
+    errors.push('Wallet launch intent aud must use https, or http for localhost development.');
+    return '';
+  }
+
+  const audienceOrigin = parsedAudience.origin;
+  if (audienceOrigin !== window.location.origin) {
+    errors.push(`Wallet launch intent aud must match this dApp origin (${window.location.origin}).`);
+    return '';
+  }
+  return audienceOrigin;
+}
+
+function parseWalletLaunchTimestamp(raw: unknown, fieldLabel: string, errors: string[], required: boolean): string {
+  const value = asString(raw);
+  if (!value) {
+    if (required) {
+      errors.push(`Wallet launch intent ${fieldLabel} is required.`);
+    }
+    return '';
+  }
+
+  const parsedTimestamp = Date.parse(value);
+  if (!Number.isFinite(parsedTimestamp)) {
+    errors.push(`Wallet launch intent ${fieldLabel} must be an ISO timestamp.`);
+    return '';
+  }
+  return new Date(parsedTimestamp).toISOString();
+}
+
+function parseWalletLaunchIntentFromLocation(): WalletLaunchIntentParseResult {
+  const { source, value } = extractWalletLaunchIntentParam();
+  if (source === 'query' && !value) {
+    return {
+      source,
+      intent: null,
+      errors: ['Query-string wallet launch intents are only accepted on localhost. Use #walletIntent instead.'],
+    };
+  }
+  if (!value || !source) {
+    return { intent: null, errors: [] };
+  }
+
+  const errors: string[] = [];
+  let decoded = '';
+  try {
+    decoded = decodeWalletLaunchIntentValue(value);
+  } catch {
+    return { source, intent: null, errors: ['Wallet launch intent could not be decoded.'] };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded) as unknown;
+  } catch {
+    return {
+      source,
+      intent: null,
+      rawText: decoded,
+      errors: ['Wallet launch intent is not valid JSON.'],
+    };
+  }
+
+  const obj = asObject(parsed);
+  if (!obj) {
+    return {
+      source,
+      intent: null,
+      rawPayload: parsed,
+      rawText: decoded,
+      errors: ['Wallet launch intent must be a JSON object.'],
+    };
+  }
+
+  if (asInt(obj.version) !== 1) {
+    errors.push('Wallet launch intent version must be 1.');
+  }
+
+  const connection = asObject(obj.connection);
+  if (!connection) {
+    errors.push('Wallet launch intent connection is required and must be an object.');
+  }
+
+  const rawMode = asString(connection?.mode);
+  const mode = rawMode ? normalizeConnectionMode(rawMode) : null;
+  if (!mode) {
+    errors.push('Wallet launch intent connection.mode must be picker or direct-remote.');
+  }
+
+  const requestId = parseWalletLaunchRequestId(obj.requestId, errors, true);
+  const audience = parseWalletLaunchAudience(obj.aud, errors, true);
+  const issuedAt = parseWalletLaunchTimestamp(obj.issuedAt, 'issuedAt', errors, true);
+  const expiresAt = parseWalletLaunchTimestamp(obj.expiresAt, 'expiresAt', errors, true);
+  const issuedAtMs = issuedAt ? Date.parse(issuedAt) : Number.NaN;
+  const expiresAtMs = expiresAt ? Date.parse(expiresAt) : Number.NaN;
+  const nowMs = Date.now();
+  if (Number.isFinite(issuedAtMs) && issuedAtMs - nowMs > WALLET_LAUNCH_INTENT_CLOCK_SKEW_MS) {
+    errors.push('Wallet launch intent issuedAt is too far in the future.');
+  }
+  if (Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs) {
+    errors.push('Wallet launch intent has expired.');
+  }
+  if (Number.isFinite(issuedAtMs) && Number.isFinite(expiresAtMs) && expiresAtMs <= issuedAtMs) {
+    errors.push('Wallet launch intent expiresAt must be after issuedAt.');
+  }
+
+  const rawNetworkId = asString(connection?.networkId);
+  const networkId = rawNetworkId ? parseSupportedNetworkId(rawNetworkId) : null;
+  if (rawNetworkId && !networkId) {
+    errors.push(`Wallet launch intent connection.networkId "${rawNetworkId}" is not supported.`);
+  }
+
+  const remote = asObject(connection?.remote);
+  if (connection?.remote !== undefined && !remote) {
+    errors.push('Wallet launch intent connection.remote must be an object.');
+  }
+  const remoteName = asString(remote?.name).slice(0, 80);
+  const rawRemoteRpcUrl = asString(remote?.rpcUrl);
+  let remoteRpcUrl = '';
+  if (rawRemoteRpcUrl) {
+    const parsedRemoteRpcUrl = parseUrl(rawRemoteRpcUrl);
+    if (!parsedRemoteRpcUrl) {
+      errors.push('Wallet launch intent connection.remote.rpcUrl must be an absolute URL.');
+    } else if (!isAllowedRemoteGatewayUrl(parsedRemoteRpcUrl)) {
+      errors.push('Wallet launch intent connection.remote.rpcUrl must use https, or http for localhost development.');
+    } else {
+      remoteRpcUrl = parsedRemoteRpcUrl.toString();
+    }
+  }
+
+  if (mode === 'direct-remote' && !remoteRpcUrl) {
+    errors.push('Direct remote launch intent requires connection.remote.rpcUrl.');
+  }
+
+  let reconciliationCommandId = '';
+  let reconciliationTransferMeta = '';
+  if (obj.reconciliation !== undefined) {
+    const reconciliation = asObject(obj.reconciliation);
+    if (!reconciliation) {
+      errors.push('Wallet launch intent reconciliation must be an object.');
+    } else {
+      reconciliationCommandId = parseReconciliationValue(
+        reconciliation.commandId,
+        'Wallet launch intent reconciliation.commandId',
+        errors,
+      );
+      reconciliationTransferMeta = parseReconciliationValue(
+        reconciliation.transferMeta,
+        'Wallet launch intent reconciliation.transferMeta',
+        errors,
+      );
+    }
+  }
+
+  if (errors.length > 0 || !mode) {
+    return { source, intent: null, rawPayload: parsed, rawText: decoded, errors };
+  }
+
+  return {
+    source,
+    rawPayload: parsed,
+    rawText: decoded,
+    intent: {
+      source,
+      mode,
+      ...(requestId ? { requestId } : {}),
+      ...(audience ? { audience } : {}),
+      ...(issuedAt ? { issuedAt } : {}),
+      ...(expiresAt ? { expiresAt } : {}),
+      ...(networkId ? { networkId } : {}),
+      ...(remoteName ? { remoteName } : {}),
+      ...(remoteRpcUrl ? { remoteRpcUrl } : {}),
+      ...(reconciliationCommandId ? { reconciliationCommandId } : {}),
+      ...(reconciliationTransferMeta ? { reconciliationTransferMeta } : {}),
+    },
+    errors,
+  };
+}
+
+function renderWalletLaunchIntentStatus(result: WalletLaunchIntentParseResult): void {
+  const status = els.launchIntentStatus;
+  if (!result.source && result.errors.length === 0) {
+    status.classList.add('hidden');
+    status.textContent = '';
+    status.removeAttribute('data-tone');
+    return;
+  }
+
+  status.classList.remove('hidden');
+  if (result.errors.length > 0) {
+    status.dataset.tone = 'warn';
+    status.textContent = `Wallet launch intent ignored: ${result.errors.join(' ')}`;
+    return;
+  }
+
+  const intent = result.intent;
+  if (!intent) {
+    status.classList.add('hidden');
+    status.textContent = '';
+    status.removeAttribute('data-tone');
+    return;
+  }
+
+  const remoteHost = intent.remoteRpcUrl ? parseUrl(intent.remoteRpcUrl)?.host : '';
+  const details = [
+    intent.mode === 'direct-remote' ? 'direct remote' : 'picker',
+    intent.networkId ? getNetworkPreset(intent.networkId).label : '',
+    intent.remoteName || remoteHost || '',
+    intent.requestId ? 'requestId' : '',
+    intent.expiresAt ? `expires ${intent.expiresAt}` : '',
+    intent.reconciliationCommandId ? 'reconciliation commandId' : '',
+    intent.reconciliationTransferMeta ? 'transfer meta' : '',
+  ].filter(Boolean);
+  status.dataset.tone = 'ok';
+  status.textContent = `Wallet launch intent applied: ${details.join(' / ')}`;
+}
+
+function applyWalletLaunchIntent(result: WalletLaunchIntentParseResult): void {
+  renderWalletLaunchIntentStatus(result);
+  logWalletLaunchIntent(result);
+  const intent = result.intent;
+  if (!intent) return;
+
+  els.connectionMode.value = intent.mode;
+  if (intent.networkId && els.networkPreset.value !== intent.networkId) {
+    applyNetworkPreset(intent.networkId, false);
+  }
+  if (intent.remoteRpcUrl) {
+    els.remoteUrl.value = intent.remoteRpcUrl;
+    walletLaunchRemoteRpcUrl = intent.remoteRpcUrl;
+    walletLaunchRemoteName = intent.remoteName || '';
+  }
+  syncWalletIdentityPreview();
+  syncWalletIntentFormFromSettings();
+}
+
+function getRequestedWalletLaunchNetworkId(): string {
+  return WALLET_LAUNCH_INTENT.intent?.networkId || '';
+}
+
+function getWalletLaunchReconciliationCommandId(): string {
+  return WALLET_LAUNCH_INTENT.intent?.reconciliationCommandId || '';
+}
+
+function getWalletLaunchReconciliationTransferMeta(): string {
+  return WALLET_LAUNCH_INTENT.intent?.reconciliationTransferMeta || '';
+}
+
+function logWalletLaunchIntent(result: WalletLaunchIntentParseResult): void {
+  if (!result.source) return;
+
+  appendLog(
+    result.errors.length > 0 ? 'ERR' : 'INFO',
+    result.errors.length > 0
+      ? `wallet launch intent from ${result.source} -> ignored`
+      : `wallet launch intent from ${result.source} -> decoded payload`,
+    {
+      source: result.source,
+      ...(result.rawPayload !== undefined ? { payload: result.rawPayload } : {}),
+      ...(result.rawPayload === undefined && result.rawText ? { rawText: result.rawText } : {}),
+      ...(result.intent ? {
+        applied: {
+          requestId: result.intent.requestId ? '[present]' : undefined,
+          audience: result.intent.audience,
+          issuedAt: result.intent.issuedAt,
+          expiresAt: result.intent.expiresAt,
+          mode: result.intent.mode,
+          networkId: result.intent.networkId,
+          remoteName: result.intent.remoteName,
+          remoteRpcUrl: result.intent.remoteRpcUrl,
+          reconciliationCommandId: result.intent.reconciliationCommandId ? '[present]' : undefined,
+          reconciliationTransferMeta: result.intent.reconciliationTransferMeta ? '[present]' : undefined,
+        },
+      } : {}),
+      ...(result.errors.length > 0 ? { errors: result.errors } : {}),
+    },
+  );
+}
+
+function stripMillisecondsFromISO(iso: string): string {
+  return iso.replace(/\.\d{3}Z$/, 'Z');
+}
+
+function buildWalletIntentRequestId(): string {
+  return `walletreq_${crypto.randomUUID()}`;
+}
+
+function buildWalletIntentIssuedAt(): string {
+  return stripMillisecondsFromISO(new Date().toISOString());
+}
+
+function buildWalletIntentExpiresAt(issuedAt: string): string {
+  const issuedAtMs = Date.parse(issuedAt);
+  const baseMs = Number.isFinite(issuedAtMs) ? issuedAtMs : Date.now();
+  return stripMillisecondsFromISO(new Date(baseMs + WALLET_LAUNCH_INTENT_TTL_MS).toISOString());
+}
+
+function buildDefaultWalletIntentTargetUrl(): string {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
+function getWalletIntentTargetOrigin(): string {
+  const targetUrl = parseUrl(els.walletIntentTargetUrl.value.trim());
+  return targetUrl?.origin || '';
+}
+
+function buildGeneratedWalletIntentRemoteName(networkId = getSelectedNetworkId()): string {
+  return `Configured ${getNetworkPreset(networkId).label} Gateway`;
+}
+
+function getGeneratedWalletIntentRemoteUrl(networkId: string): string {
+  return getConfiguredWalletRpcUrl(networkId, getNetworkPreset(networkId).walletDomain);
+}
+
+function isAllowedDappTargetUrl(url: URL): boolean {
+  if (url.protocol === 'https:') {
+    return true;
+  }
+  if (url.protocol === 'http:' && isLocalDevelopmentHost(url.hostname)) {
+    return true;
+  }
+  return false;
+}
+
+function getWalletIntentGeneratorNetworkId(): string {
+  return parseSupportedNetworkId(els.walletIntentNetwork.value) || getSelectedNetworkId();
+}
+
+function getWalletIntentGeneratorConnectionMode(): ConnectionMode {
+  return normalizeConnectionMode(els.walletIntentMode.value) ?? 'picker';
+}
+
+function buildGeneratedWalletIntentPayload(): Record<string, unknown> {
+  const remoteName = els.walletIntentRemoteName.value.trim();
+  const remoteUrl = els.walletIntentRemoteUrl.value.trim();
+  const reconciliationCommandId = els.walletIntentCommandId.value.trim();
+  const reconciliationTransferMeta = els.walletIntentTransferMeta.value.trim();
+  const connection: Record<string, unknown> = {
+    mode: getWalletIntentGeneratorConnectionMode(),
+    networkId: getWalletIntentGeneratorNetworkId(),
+  };
+  if (remoteName || remoteUrl) {
+    connection.remote = {
+      ...(remoteName ? { name: remoteName } : {}),
+      ...(remoteUrl ? { rpcUrl: parseUrl(remoteUrl)?.toString() || remoteUrl } : {}),
+    };
+  }
+
+  const payload: Record<string, unknown> = {
+    version: 1,
+    requestId: els.walletIntentRequestId.value.trim(),
+    aud: els.walletIntentAudience.value.trim(),
+    issuedAt: els.walletIntentIssuedAt.value.trim(),
+    expiresAt: els.walletIntentExpiresAt.value.trim(),
+    connection,
+  };
+
+  if (reconciliationCommandId || reconciliationTransferMeta) {
+    payload.reconciliation = {
+      ...(reconciliationCommandId ? { commandId: reconciliationCommandId } : {}),
+      ...(reconciliationTransferMeta ? { transferMeta: reconciliationTransferMeta } : {}),
+    };
+  }
+
+  return payload;
+}
+
+function buildGeneratedWalletIntentUrl(payload: Record<string, unknown>): string {
+  const targetUrl = parseUrl(els.walletIntentTargetUrl.value.trim());
+  if (!targetUrl) {
+    return '';
+  }
+  const url = new URL(targetUrl.toString());
+  url.hash = `${WALLET_LAUNCH_INTENT_KEY}=${base64UrlEncodeUtf8(JSON.stringify(payload))}`;
+  return url.toString();
+}
+
+function setWalletIntentLinkStatus(text: string, tone: 'info' | 'ok' | 'warn' = 'info'): void {
+  els.walletIntentLinkStatus.textContent = text;
+  els.walletIntentLinkStatus.dataset.tone = tone;
+}
+
+function syncWalletIntentFormFromSettings(force = false): void {
+  if (walletIntentFormDirty && !force) {
+    updateWalletIntentLinkPreview();
+    return;
+  }
+
+  const networkId = getSelectedNetworkId();
+  const targetUrl = buildDefaultWalletIntentTargetUrl();
+  const targetOrigin = parseUrl(targetUrl)?.origin || window.location.origin;
+  const requestId = buildWalletIntentRequestId();
+  const issuedAt = buildWalletIntentIssuedAt();
+  els.walletIntentTargetUrl.value = targetUrl;
+  els.walletIntentRequestId.value = requestId;
+  els.walletIntentAudience.value = targetOrigin;
+  els.walletIntentIssuedAt.value = issuedAt;
+  els.walletIntentExpiresAt.value = buildWalletIntentExpiresAt(issuedAt);
+  els.walletIntentNetwork.value = networkId;
+  els.walletIntentMode.value = getSelectedConnectionMode();
+  els.walletIntentRemoteName.value = buildGeneratedWalletIntentRemoteName(networkId);
+  els.walletIntentRemoteUrl.value = els.remoteUrl.value.trim();
+  els.walletIntentCommandId.value = requestId;
+  els.walletIntentTransferMeta.value = '';
+  walletIntentGeneratorLastNetworkId = networkId;
+  walletIntentGeneratorLastRequestId = requestId;
+  walletIntentGeneratorLastTargetOrigin = targetOrigin;
+  walletIntentFormDirty = false;
+  updateWalletIntentLinkPreview();
+}
+
+function getWalletIntentPayloadValidationError(): string {
+  const requestErrors: string[] = [];
+  parseReconciliationValue(els.walletIntentRequestId.value, 'Request ID', requestErrors);
+  if (!els.walletIntentRequestId.value.trim()) {
+    requestErrors.push('Request ID is required.');
+  }
+  if (requestErrors.length > 0) {
+    return requestErrors.join(' ');
+  }
+
+  const audience = els.walletIntentAudience.value.trim();
+  const parsedAudience = audience ? parseUrl(audience) : null;
+  if (!audience || !parsedAudience) {
+    return 'Audience Origin must be an absolute origin URL.';
+  }
+  if (parsedAudience.pathname !== '/' || parsedAudience.search || parsedAudience.hash) {
+    return 'Audience Origin must not include a path, query string, or fragment.';
+  }
+  const targetOrigin = getWalletIntentTargetOrigin();
+  if (targetOrigin && parsedAudience.origin !== targetOrigin) {
+    return 'Audience Origin must match the Target dApp URL origin.';
+  }
+
+  const issuedAt = els.walletIntentIssuedAt.value.trim();
+  const expiresAt = els.walletIntentExpiresAt.value.trim();
+  const issuedAtMs = Date.parse(issuedAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  if (!issuedAt || !Number.isFinite(issuedAtMs)) {
+    return 'Issued At must be an ISO timestamp.';
+  }
+  if (!expiresAt || !Number.isFinite(expiresAtMs)) {
+    return 'Expires At must be an ISO timestamp.';
+  }
+  if (issuedAtMs - Date.now() > WALLET_LAUNCH_INTENT_CLOCK_SKEW_MS) {
+    return 'Issued At is too far in the future.';
+  }
+  if (expiresAtMs <= Date.now()) {
+    return 'Expires At must be in the future.';
+  }
+  if (expiresAtMs <= issuedAtMs) {
+    return 'Expires At must be after Issued At.';
+  }
+
+  const remoteUrl = els.walletIntentRemoteUrl.value.trim();
+  const parsedRemoteUrl = remoteUrl ? parseUrl(remoteUrl) : null;
+  if (remoteUrl && !parsedRemoteUrl) {
+    return 'Gateway URL must be an absolute URL.';
+  }
+  if (parsedRemoteUrl && !isAllowedRemoteGatewayUrl(parsedRemoteUrl)) {
+    return 'Gateway URL must use https, or http for localhost development.';
+  }
+  if (getWalletIntentGeneratorConnectionMode() === 'direct-remote' && !remoteUrl) {
+    return 'Gateway URL is required for direct remote launch links.';
+  }
+
+  const reconciliationErrors: string[] = [];
+  parseReconciliationValue(
+    els.walletIntentCommandId.value,
+    'Reconciliation commandId',
+    reconciliationErrors,
+  );
+  parseReconciliationValue(
+    els.walletIntentTransferMeta.value,
+    'Transfer meta',
+    reconciliationErrors,
+  );
+  if (reconciliationErrors.length > 0) {
+    return reconciliationErrors.join(' ');
+  }
+
+  return '';
+}
+
+function getWalletIntentUrlValidationError(): string {
+  const targetUrl = els.walletIntentTargetUrl.value.trim();
+  const parsedTargetUrl = targetUrl ? parseUrl(targetUrl) : null;
+  if (!targetUrl || !parsedTargetUrl) {
+    return 'Target dApp URL must be an absolute URL.';
+  }
+  if (!isAllowedDappTargetUrl(parsedTargetUrl)) {
+    return 'Target dApp URL must use https, or http for localhost development.';
+  }
+
+  return getWalletIntentPayloadValidationError();
+}
+
+function updateWalletIntentLinkPreview(): void {
+  const payload = buildGeneratedWalletIntentPayload();
+  els.walletIntentPayload.value = JSON.stringify(payload, null, 2);
+  els.walletIntentUrl.value = buildGeneratedWalletIntentUrl(payload);
+
+  const validationError = getWalletIntentUrlValidationError();
+  if (validationError) {
+    setWalletIntentLinkStatus(validationError, 'warn');
+    return;
+  }
+
+  setWalletIntentLinkStatus(
+    walletIntentFormDirty
+      ? 'Generated from edited form values.'
+      : 'Generated from current settings. Edit fields to customize the launch intent.',
+    'info',
+  );
+}
+
+function assertWalletIntentUrlReady(): void {
+  const validationError = getWalletIntentUrlValidationError();
+  if (validationError) {
+    throw new Error(validationError);
+  }
+}
+
+function assertWalletIntentPayloadReady(): void {
+  const validationError = getWalletIntentPayloadValidationError();
+  if (validationError) {
+    throw new Error(validationError);
+  }
+}
+
+async function copyTextToClipboard(label: string, text: string): Promise<void> {
+  if (!text.trim()) {
+    throw new Error(`${label} is empty`);
+  }
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const scratch = document.createElement('textarea');
+    scratch.value = text;
+    scratch.setAttribute('readonly', 'true');
+    scratch.style.position = 'fixed';
+    scratch.style.left = '-9999px';
+    document.body.appendChild(scratch);
+    scratch.select();
+    const copied = document.execCommand('copy');
+    scratch.remove();
+    if (!copied) {
+      throw new Error(`Failed to copy ${label}`);
+    }
+  }
+  setWalletIntentLinkStatus(`${label} copied.`, 'ok');
+  appendLog('OK', `launch links -> copied ${label}`);
 }
 
 function buildNetworkPresets(): Record<string, NetworkPreset> {
@@ -724,6 +1476,7 @@ function applyNetworkPreset(networkId: string, persist = true): void {
   }
 
   syncWalletIdentityPreview();
+  syncWalletIntentFormFromSettings();
 }
 
 function loadDomainSettingsStore(): DomainSettingsStore {
@@ -802,6 +1555,7 @@ function applyDomainSettings(persist = true): void {
   }
 
   syncWalletIdentityPreview();
+  syncWalletIntentFormFromSettings();
 }
 
 function applyDomainSettingsFromInputs(): void {
@@ -1358,7 +2112,7 @@ function shouldUseSafariDirectRemoteConnect(): boolean {
   return isMacOSSafariBrowser() && Boolean(els.remoteUrl.value.trim());
 }
 
-function setSDKSingletonClientForSafariRemote(client: DappClient | null): void {
+function setSDKSingletonClientForDirectRemote(client: DappClient | null): void {
   // 2026-04-24: SDK 1.1.0 has no supported direct-remote connect API
   // that both bypasses the picker and preserves module-level helpers like
   // status(), listAccounts(), and open(). Keep this isolated so it can be
@@ -1366,15 +2120,18 @@ function setSDKSingletonClientForSafariRemote(client: DappClient | null): void {
   (dappSDK as unknown as DappSDKWithInternalClient).client = client;
 }
 
-async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
+async function connectRemoteDirect(flowLabel: 'direct-remote' | 'safari-direct-remote'): Promise<SDKConnectResult> {
   const preferredGatewayUrl = els.remoteUrl.value.trim();
   if (!preferredGatewayUrl) {
-    throw new Error('Remote wallet gateway URL is required for Safari remote connect.');
+    throw new Error('Remote wallet gateway URL is required for direct remote connect.');
   }
 
   const parsedPreferredGatewayUrl = parseUrl(preferredGatewayUrl);
   if (!parsedPreferredGatewayUrl) {
     throw new Error('Preferred wallet gateway URL must be an absolute URL.');
+  }
+  if (!isAllowedRemoteGatewayUrl(parsedPreferredGatewayUrl)) {
+    throw new Error('Direct remote wallet gateway URL must use https, or http for localhost development.');
   }
 
   const rpcUrl = parsedPreferredGatewayUrl.toString();
@@ -1384,10 +2141,10 @@ async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
     name: buildRemotePickerEntryLabel(rpcUrl),
     rpcUrl,
   });
-  appendLog('INFO', 'connect -> Safari direct remote gateway', { rpcUrl });
+  appendLog('INFO', 'connect -> direct remote gateway', { rpcUrl, connectFlow: flowLabel });
   const provider = adapter.provider();
   const client = new DappClient(provider, { providerType: 'remote' });
-  setSDKSingletonClientForSafariRemote(client);
+  setSDKSingletonClientForDirectRemote(client);
 
   try {
     const result = await client.connect();
@@ -1396,7 +2153,7 @@ async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
     }
     return result;
   } catch (err) {
-    setSDKSingletonClientForSafariRemote(null);
+    setSDKSingletonClientForDirectRemote(null);
     clearPersistedWalletSessionState();
     try {
       walletPopup.close();
@@ -1408,6 +2165,7 @@ async function connectSafariRemoteDirect(): Promise<SDKConnectResult> {
 }
 
 async function connectWithSDKPicker(): Promise<SDKConnectResult> {
+  setSDKSingletonClientForDirectRemote(null);
   await init(buildPickerConnectOptions());
   return connect();
 }
@@ -1464,6 +2222,18 @@ function clearPersistedWalletSessionState(): void {
   (window as Window & { canton?: RequestingProvider }).canton = undefined;
 }
 
+function getWalletLaunchRemoteNameForUrl(rpcUrl: string): string {
+  if (!walletLaunchRemoteName || !walletLaunchRemoteRpcUrl) {
+    return '';
+  }
+  const parsedRpcUrl = parseUrl(rpcUrl);
+  const parsedLaunchUrl = parseUrl(walletLaunchRemoteRpcUrl);
+  if (!parsedRpcUrl || !parsedLaunchUrl) {
+    return '';
+  }
+  return parsedRpcUrl.toString() === parsedLaunchUrl.toString() ? walletLaunchRemoteName : '';
+}
+
 function buildRemotePickerEntryLabel(rpcUrl: string): string {
   const trimmedRpcUrl = rpcUrl.trim();
   if (!trimmedRpcUrl) {
@@ -1471,6 +2241,10 @@ function buildRemotePickerEntryLabel(rpcUrl: string): string {
   }
 
   const parsedRpcUrl = parseUrl(trimmedRpcUrl);
+  const launchName = getWalletLaunchRemoteNameForUrl(trimmedRpcUrl);
+  if (launchName) {
+    return parsedRpcUrl ? `${launchName} (${parsedRpcUrl.host})` : launchName;
+  }
   if (!parsedRpcUrl) {
     return 'Configured Gateway (invalid URL)';
   }
@@ -2012,6 +2786,15 @@ function joinUrl(base: string, path: string): string {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+function getPreferredCommandId(): string {
+  return getWalletLaunchReconciliationCommandId() || crypto.randomUUID();
+}
+
+function buildTransferMetaValues(): Record<string, string> {
+  const reconciliationId = getWalletLaunchReconciliationTransferMeta();
+  return reconciliationId ? { [TRANSFER_META_RECONCILIATION_KEY]: reconciliationId } : {};
+}
+
 function parseUrl(raw: string): URL | null {
   try {
     return new URL(raw);
@@ -2233,6 +3016,7 @@ function buildTransferFactoryChoiceArguments(
 ): Record<string, unknown> {
   const requestedAtISO = new Date().toISOString();
   const executeBeforeISO = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const transferMetaValues = buildTransferMetaValues();
   return {
     expectedAdmin: transferInput.expectedAdmin,
     transfer: {
@@ -2247,7 +3031,7 @@ function buildTransferFactoryChoiceArguments(
       executeBefore: executeBeforeISO,
       inputHoldingCids: transferInput.inputHoldingCids,
       meta: {
-        values: {},
+        values: transferMetaValues,
       },
     },
     extraArgs: {
@@ -2481,6 +3265,36 @@ async function tryAutoConfigureRegistryUrl(p: RequestingProvider): Promise<void>
   }
 }
 
+async function enforceWalletLaunchNetwork(p: RequestingProvider): Promise<void> {
+  const requestedNetworkId = getRequestedWalletLaunchNetworkId();
+  if (!requestedNetworkId) return;
+
+  const reportedNetworkId = await getActiveNetworkId(p);
+  const activeNetworkId = parseSupportedNetworkId(reportedNetworkId);
+  if (activeNetworkId === requestedNetworkId) return;
+
+  const reportedLabel = activeNetworkId || reportedNetworkId.trim() || 'unknown';
+  throw new Error(
+    `Wallet launch intent requested ${requestedNetworkId}, but connected wallet reported ${reportedLabel}. Reconnect with the requested network or remove the launch intent.`,
+  );
+}
+
+async function cleanupRejectedWalletConnection(): Promise<void> {
+  try {
+    await disconnect();
+  } catch (err) {
+    appendLog('INFO', 'connect -> cleanup after rejected connection skipped', {
+      reason: normalizeError(err).message,
+    });
+  } finally {
+    setSDKSingletonClientForDirectRemote(null);
+    clearPersistedWalletSessionState();
+    eventsSubscribed = false;
+    resetTransferFactoryDiscoveryUI();
+    renderConnectedAccount(null);
+  }
+}
+
 type TransferHelperInput = {
   toParty: string;
   amount: string;
@@ -2648,8 +3462,9 @@ function buildTransferPrepareExecutePayload(
 ): Record<string, unknown> {
   const requestedAtISO = new Date().toISOString();
   const executeBeforeISO = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const transferMetaValues = buildTransferMetaValues();
   return {
-    commandId: crypto.randomUUID(),
+    commandId: getPreferredCommandId(),
     commands: [
       {
         ExerciseCommand: {
@@ -2670,7 +3485,7 @@ function buildTransferPrepareExecutePayload(
               executeBefore: executeBeforeISO,
               inputHoldingCids: transferInput.inputHoldingCids,
               meta: {
-                values: {},
+                values: transferMetaValues,
               },
             },
             extraArgs: {
@@ -2846,7 +3661,7 @@ function ensureCommandId(params: Record<string, unknown>): string {
     return existingCommandId;
   }
 
-  const generatedCommandId = crypto.randomUUID();
+  const generatedCommandId = getPreferredCommandId();
   params.commandId = generatedCommandId;
   els.commandsJson.value = JSON.stringify(params, null, 2);
   return generatedCommandId;
@@ -2993,8 +3808,123 @@ els.networkPreset.addEventListener('change', () => {
 
 els.walletDomain.addEventListener('change', applyDomainSettingsFromInputs);
 els.devnetRegistryDomain.addEventListener('change', applyDomainSettingsFromInputs);
-els.remoteUrl.addEventListener('change', syncWalletIdentityPreview);
-els.remoteUrl.addEventListener('input', syncWalletIdentityPreview);
+els.remoteUrl.addEventListener('change', () => {
+  syncWalletIdentityPreview();
+  syncWalletIntentFormFromSettings();
+});
+els.remoteUrl.addEventListener('input', () => {
+  syncWalletIdentityPreview();
+  syncWalletIntentFormFromSettings();
+});
+els.connectionMode.addEventListener('change', () => {
+  syncWalletIntentFormFromSettings();
+  appendLog('INFO', 'connect -> connection mode selected', { connectionMode: getSelectedConnectionMode() });
+});
+
+els.walletIntentForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+});
+
+for (const control of [
+  els.walletIntentAudience,
+  els.walletIntentIssuedAt,
+  els.walletIntentExpiresAt,
+  els.walletIntentMode,
+  els.walletIntentRemoteName,
+  els.walletIntentRemoteUrl,
+  els.walletIntentCommandId,
+  els.walletIntentTransferMeta,
+]) {
+  control.addEventListener('input', () => {
+    walletIntentFormDirty = true;
+    updateWalletIntentLinkPreview();
+  });
+  control.addEventListener('change', () => {
+    walletIntentFormDirty = true;
+    updateWalletIntentLinkPreview();
+  });
+}
+
+function handleWalletIntentTargetInput(): void {
+  const targetOrigin = getWalletIntentTargetOrigin();
+  walletIntentFormDirty = true;
+  if (targetOrigin && (!els.walletIntentAudience.value.trim() || els.walletIntentAudience.value.trim() === walletIntentGeneratorLastTargetOrigin)) {
+    els.walletIntentAudience.value = targetOrigin;
+    walletIntentGeneratorLastTargetOrigin = targetOrigin;
+  }
+  updateWalletIntentLinkPreview();
+}
+
+function handleWalletIntentRequestIdInput(): void {
+  const requestId = els.walletIntentRequestId.value.trim();
+  walletIntentFormDirty = true;
+  if (!els.walletIntentCommandId.value.trim() || els.walletIntentCommandId.value.trim() === walletIntentGeneratorLastRequestId) {
+    els.walletIntentCommandId.value = requestId;
+  }
+  walletIntentGeneratorLastRequestId = requestId;
+  updateWalletIntentLinkPreview();
+}
+
+function handleWalletIntentNetworkInput(): void {
+  const networkId = getWalletIntentGeneratorNetworkId();
+  walletIntentFormDirty = true;
+  if (networkId !== walletIntentGeneratorLastNetworkId) {
+    els.walletIntentRemoteName.value = buildGeneratedWalletIntentRemoteName(networkId);
+    els.walletIntentRemoteUrl.value = getGeneratedWalletIntentRemoteUrl(networkId);
+    walletIntentGeneratorLastNetworkId = networkId;
+  }
+  updateWalletIntentLinkPreview();
+}
+
+els.walletIntentTargetUrl.addEventListener('input', handleWalletIntentTargetInput);
+els.walletIntentTargetUrl.addEventListener('change', handleWalletIntentTargetInput);
+els.walletIntentRequestId.addEventListener('input', handleWalletIntentRequestIdInput);
+els.walletIntentRequestId.addEventListener('change', handleWalletIntentRequestIdInput);
+els.walletIntentNetwork.addEventListener('input', handleWalletIntentNetworkInput);
+els.walletIntentNetwork.addEventListener('change', handleWalletIntentNetworkInput);
+
+els.syncWalletIntentFromSettings.addEventListener('click', () => {
+  syncWalletIntentFormFromSettings(true);
+  setWalletIntentLinkStatus('Generator reset to current settings.', 'ok');
+  appendLog('INFO', 'wallet launch intent generator -> synced from settings', {
+    targetUrl: els.walletIntentTargetUrl.value.trim(),
+    networkId: getWalletIntentGeneratorNetworkId(),
+    connectionMode: getWalletIntentGeneratorConnectionMode(),
+    remoteUrl: els.walletIntentRemoteUrl.value.trim(),
+  });
+});
+
+els.copyWalletIntentUrl.addEventListener('click', () => {
+  void run('copyWalletIntentUrl', async () => {
+    updateWalletIntentLinkPreview();
+    assertWalletIntentUrlReady();
+    await copyTextToClipboard('walletIntent URL', els.walletIntentUrl.value);
+    return { copied: true };
+  });
+});
+
+els.openWalletIntentUrl.addEventListener('click', () => {
+  void run('openWalletIntentUrl', async () => {
+    updateWalletIntentLinkPreview();
+    assertWalletIntentUrlReady();
+    const walletIntentUrl = els.walletIntentUrl.value.trim();
+    if (!walletIntentUrl) {
+      throw new Error('walletIntent URL is empty or invalid');
+    }
+    window.open(walletIntentUrl, '_blank', 'noopener');
+    setWalletIntentLinkStatus('walletIntent URL open requested.', 'ok');
+    return { opened: true, url: walletIntentUrl };
+  });
+});
+
+els.copyWalletIntentPayload.addEventListener('click', () => {
+  void run('copyWalletIntentPayload', async () => {
+    updateWalletIntentLinkPreview();
+    assertWalletIntentPayloadReady();
+    await copyTextToClipboard('walletIntent payload', els.walletIntentPayload.value);
+    return { copied: true };
+  });
+});
 
 els.transferAsset.addEventListener('change', () => {
   applySelectedAssetPreset({ overwriteRegistryUrl: true });
@@ -3020,28 +3950,43 @@ els.openWallet.addEventListener('click', () => {
 });
 
 els.connect.addEventListener('click', () => {
+  const selectedConnectionMode = getSelectedConnectionMode();
   const useSafariDirectRemoteConnect = shouldUseSafariDirectRemoteConnect();
-  if (useSafariDirectRemoteConnect) {
+  const useDirectRemoteConnect = selectedConnectionMode === 'direct-remote' || useSafariDirectRemoteConnect;
+  const connectFlow: 'sdk-picker' | 'direct-remote' | 'safari-direct-remote' =
+    selectedConnectionMode === 'direct-remote'
+      ? 'direct-remote'
+      : (useSafariDirectRemoteConnect ? 'safari-direct-remote' : 'sdk-picker');
+  if (useDirectRemoteConnect && isMacOSSafariBrowser()) {
     primeWalletPopupForSafari('connect');
   }
   void run('connect', async () => {
-    if (getCurrentProviderKind() === 'remote' || useSafariDirectRemoteConnect) {
-      (window as Window & { canton?: RequestingProvider }).canton = undefined;
+    if (getCurrentProviderKind() === 'remote' || useDirectRemoteConnect) {
+      setSDKSingletonClientForDirectRemote(null);
+      clearPersistedWalletSessionState();
     }
-    const result = useSafariDirectRemoteConnect
-      ? await connectSafariRemoteDirect()
+    const directConnectFlow: 'direct-remote' | 'safari-direct-remote' =
+      connectFlow === 'safari-direct-remote' ? 'safari-direct-remote' : 'direct-remote';
+    const result = useDirectRemoteConnect
+      ? await connectRemoteDirect(directConnectFlow)
       : await connectWithSDKPicker();
     const p = ensureProvider();
     eventsSubscribed = false;
     resetTransferFactoryDiscoveryUI();
+    try {
+      await enforceWalletLaunchNetwork(p);
+    } catch (err) {
+      await cleanupRejectedWalletConnection();
+      throw err;
+    }
     await tryAutoConfigureRegistryUrl(p);
     const accountSummary = await getAccountConnectionSummary(p);
     renderConnectedAccount(accountSummary);
     appendLog('INFO', 'connect -> active account', accountSummary);
     return {
       ...(asObject(result) ?? {}),
-      picker: !useSafariDirectRemoteConnect,
-      connectFlow: useSafariDirectRemoteConnect ? 'safari-direct-remote' : 'sdk-picker',
+      picker: !useDirectRemoteConnect,
+      connectFlow,
       preferredGateway: els.remoteUrl.value.trim() || undefined,
       activePartyId: accountSummary.primaryAccount.partyId,
       accountCount: accountSummary.accountCount,
@@ -3054,7 +3999,7 @@ els.disconnect.addEventListener('click', () => {
     try {
       return await disconnect();
     } finally {
-      setSDKSingletonClientForSafariRemote(null);
+      setSDKSingletonClientForDirectRemote(null);
       clearPersistedWalletSessionState();
       eventsSubscribed = false;
       resetTransferFactoryDiscoveryUI();
@@ -3183,6 +4128,7 @@ els.prepareExecute.addEventListener('click', () => {
     const params = parseCommandParamsInput();
     normalizeTransferFactoryTemplateInParams(params);
     await ensureTransferFactoryInputHoldingCids(p, params);
+    ensureCommandId(params);
     try {
       if (getCurrentProviderKind() === 'remote') {
         return await prepareExecuteRemoteWithLogging(params);
@@ -3208,6 +4154,7 @@ els.prepareExecuteAndWait.addEventListener('click', () => {
     const params = parseCommandParamsInput();
     normalizeTransferFactoryTemplateInParams(params);
     await ensureTransferFactoryInputHoldingCids(p, params);
+    ensureCommandId(params);
     try {
       if (getCurrentProviderKind() === 'remote') {
         return await prepareExecuteAndWaitRemote(p, params);
@@ -3279,9 +4226,11 @@ resetTransferFactoryDiscoveryUI();
 els.transferAdvanced.open = false;
 setupPaneHeightSync();
 syncWalletIdentityPreview();
+syncWalletIntentFormFromSettings(true);
 void refreshConnectedAccountPreview();
 
-appendLog('INFO', 'Ready. Click connect() to open the wallet picker.', {
+appendLog('INFO', 'Ready. Click connect() to connect.', {
   defaultRemoteUrl,
   preferredGateway: els.remoteUrl.value.trim(),
+  connectionMode: getSelectedConnectionMode(),
 });

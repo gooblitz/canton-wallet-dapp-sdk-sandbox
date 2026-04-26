@@ -103,6 +103,23 @@ textarea {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace;
 }
 
+textarea.launch-link-output {
+  min-height: 78px;
+}
+
+.wallet-intent-form {
+  margin: 8px 0 12px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.form-grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 button {
   border: 1px solid #0f172a;
   background: #0f172a;
@@ -114,6 +131,22 @@ button {
 
 button:hover {
   background: #1e293b;
+}
+
+button.text-link-button {
+  border: 0;
+  background: transparent;
+  color: #334155;
+  border-radius: 0;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.text-link-button:hover,
+button.text-link-button:focus-visible {
+  background: transparent;
+  color: #0f172a;
 }
 
 .row {
@@ -271,5 +304,10 @@ details.advanced > summary {
   #log {
     min-height: 220px;
     max-height: 55vh;
+  }
+
+  .form-grid.two {
+    grid-template-columns: 1fr;
+    gap: 0;
   }
 }

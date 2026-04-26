@@ -24,11 +24,11 @@ As of 2026-04-24, macOS Safari remote connects bypass the SDK picker and connect
 
 The click handler still primes the SDK global wallet popup synchronously from the initial `connect()` click. The SDK remote provider can then reuse that window when it receives the async `userUrl` from the wallet gateway.
 
-This keeps Chrome, iOS/iPadOS Safari, and other non-macOS-Safari browsers on the normal SDK picker path. We have not seen evidence that the exact SDK failure reproduced on iOS Safari, and iOS Safari was reported working before this workaround.
+Chrome, iOS/iPadOS Safari, and other non-macOS-Safari browsers stay on the selected connection mode. We have not seen evidence that the exact SDK failure reproduced on iOS Safari, and iOS Safari was reported working before this workaround.
 
 Tradeoff as of 2026-04-24: macOS Safari's `connect()` click targets the configured remote gateway directly. It does not offer the SDK picker selection UI for extension or alternate remote adapters on that click. Revisit this if Safari extension testing becomes a requirement here, or when upstream provides a browser-safe picker handoff.
 
-The workaround intentionally patches the SDK singleton's internal `client` field after creating a `DappClient`. That is not a public SDK API. It is isolated in `setSDKSingletonClientForSafariRemote()` and should be removed when upstream exposes a supported direct remote connect flow or fixes the picker popup lifecycle.
+The direct remote path intentionally patches the SDK singleton's internal `client` field after creating a `DappClient`. That is not a public SDK API. It is isolated in `setSDKSingletonClientForDirectRemote()` and should be removed when upstream exposes a supported direct remote connect flow or fixes the picker popup lifecycle.
 
 ## Upstream Findings
 

@@ -4,8 +4,9 @@
 
 Use a wallet-agnostic transfer prefill flow based on Token Standard registry APIs.
 
-This is intentionally separate from wallet connection UX. The sandbox now connects wallets through the
-`@canton-network/dapp-sdk@^1.1.0` picker flow, then uses the connected provider for account and submit calls.
+This is intentionally separate from wallet connection UX. The sandbox now connects wallets through
+`@canton-network/dapp-sdk@^1.1.0` using either the SDK picker flow or the direct remote path, then uses the
+connected provider for account and submit calls.
 
 ## Current Flow
 
@@ -74,7 +75,7 @@ This is intentionally separate from wallet connection UX. The sandbox now connec
 
 ## Conformance Split
 
-- Wallet connection/session flow uses the SDK picker (`connect()`) and then exposes the connected CIP-0103-style provider.
+- Wallet connection/session flow uses the SDK picker or direct remote connection mode, then exposes the connected CIP-0103-style provider.
 - Wallet interaction after connect remains CIP-0103 dApp API.
 - Transfer factory/context discovery uses Token Standard off-ledger registry API.
 - dApp-side discovery auth is API-key based via `X-API-Key`.

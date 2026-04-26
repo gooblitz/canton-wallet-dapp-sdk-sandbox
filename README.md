@@ -4,9 +4,10 @@ Small local dApp for testing Canton Wallet CIP-0103 integration with `@canton-ne
 
 ## What this tests
 
-- SDK wallet picker flow (`@canton-network/dapp-sdk@^1.1.0`)
+- SDK wallet picker and direct remote flows (`@canton-network/dapp-sdk@^1.1.0`)
 - DevNet, TestNet, and MainNet transfer presets for supported assets
 - `connect`, `disconnect`, `status`, `listAccounts`
+- wallet launch intent handoff for picker or direct remote connection
 - `getPrimaryAccount` via provider request
 - `signMessage` via provider request for extension, or direct remote JSON-RPC bridge for remote gateways when remote approval details need to be surfaced in the sandbox
 - Transfer command helper that resolves Token Standard transfer context and prefills `prepareExecute` JSON
@@ -62,11 +63,13 @@ Open: `http://127.0.0.1:4174`
 
 ## Usage (remote provider)
 
-1. Choose the network preset and ensure `Preferred Wallet Gateway URL` is your wallet backend dApp endpoint (default DevNet: `https://lat-dn.cddev.site/api/v1/dapp`).
-2. Click `connect() via picker`.
-3. In the picker, choose the configured gateway entry (host shown in the label) or enter a custom gateway URL.
-4. Use `status()` / `listAccounts()` to confirm the session.
-5. To prefill a transfer command for `prepareExecute`:
+1. Choose the network preset.
+2. Choose `Connection Mode`.
+3. Ensure `Preferred Wallet Gateway URL` is your wallet backend dApp endpoint (default DevNet: `https://lat-dn.cddev.site/api/v1/dapp`).
+4. Click `connect()`.
+5. In picker mode, choose the configured gateway entry (host shown in the label) or enter a custom gateway URL.
+6. Use `status()` / `listAccounts()` to confirm the session.
+7. To prefill a transfer command for `prepareExecute`:
    - Choose `CC (Amulet)` or `USDCx` in `Asset`.
    - Fill recipient and amount.
    - Use either:
@@ -84,14 +87,15 @@ Open: `http://127.0.0.1:4174`
    - Expand `Advanced (optional)` for expected admin, template-id override, context, and disclosed contracts.
    - Click `Prefill prepareExecute transfer`.
    - Review the generated JSON and run `prepareExecute()` (or `prepareExecuteAndWait()`).
-6. Use the other actions (`status`, `listAccounts`, `signMessage`, etc.).
+8. Use the other actions (`status`, `listAccounts`, `signMessage`, etc.).
 
 ## Usage (extension provider)
 
 1. Load wallet browser extension.
-2. Click `connect() via picker`.
-3. Choose `Browser Extension` in the picker.
-4. Use the same action buttons.
+2. Keep `Connection Mode` on `Picker`.
+3. Click `connect()`.
+4. Choose `Browser Extension` in the picker.
+5. Use the same action buttons.
 
 ## Notes
 
@@ -112,6 +116,11 @@ Open: `http://127.0.0.1:4174`
 - MainNet USDCx currently defaults to registrar `decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef`.
 - MainNet CC uses `/api/registry-proxy/mainnet`. Set `VITE_MAINNET_DSO_ADMIN` only when overriding the built-in Amulet/CC admin. Do not infer Amulet from unrelated MainNet catalog entries that happen to use ticker `CC`; the public catalog currently confirms USDCx, but not a `DSO::...` Amulet registrar.
 - The normal connect flow initializes the SDK picker with `init()` before `connect()`, matching the SDK 1.1.0 adapter-registration API. The configured gateway URL in Settings is only used to seed that picker; the active remote session may come from a different picker entry.
+- Wallets can launch this sandbox, or a third-party dApp using the same pattern, with `#walletIntent=<base64url-json>` to prefill request ID, audience origin, expiry, network, connection mode, gateway label, gateway URL, and optional reconciliation IDs. See [wallet launch intent notes](dapps/WALLET-LAUNCH-INTENT.md).
+- The `Launch Links` section is an editable v1 `walletIntent` generator. It prepopulates from the current network, connection mode, and preferred gateway URL, then lets you override the target dApp URL, request/audience/timestamp fields, gateway label/URL, and reconciliation fields before copying or opening the link. `Use Current Settings` resets the generator, while manual edits are preserved until reset.
+- Direct remote mode bypasses the SDK picker and connects to the configured gateway URL. It is intended for wallet-controlled handoff flows; picker mode remains the default because it supports extension discovery and user choice. Direct remote gateways must use HTTPS, except for localhost development URLs.
+- When a wallet launch intent includes `connection.networkId`, the sandbox verifies the connected wallet reports that network before continuing and disconnects rejected sessions on mismatch.
+- Wallet launch intent `reconciliation.commandId` is copied into `prepareExecute.commandId` when a request does not already have one. `reconciliation.transferMeta` is optional and is written into generated transfer metadata at `cddev.site/reconciliation-id` only when non-blank; treat it as transaction-visible and public-safe. The decoded launch intent is also written to the app log for debugging.
 - SDK 1.1.0 adds `WalletConnectAdapter`. This sandbox installs the optional WalletConnect peer packages because Vite dev optimization of SDK 1.1.0 imports that code path, but it does not register the adapter yet. Enabling WalletConnect should be a separate change with a configured WalletConnect project ID and wallet-side approval testing.
 - The UI now separates wallet/gateway identity from account identity: the picker entry identifies the wallet source, while the page shows the resolved connected party/account after `connect()`.
 - Relative Registry / Scan endpoints should use same-origin `/api/registry-proxy...` for scan-proxy routes or `/api/token-standard...` for utilities token-standard routes; absolute Registry / Scan URLs are also supported.
@@ -121,7 +130,7 @@ Open: `http://127.0.0.1:4174`
 - `getPrimaryAccount` now goes through the injected SDK provider for both extension and remote connections.
 - `prepareExecuteAndWait` uses the SDK helper for extension wallets, but keeps a custom remote wait path so the sandbox can wait up to 5 minutes and correlate `txChanged` events by `commandId`.
 - `signMessage` is still a special case for remote gateways in this sandbox: although the SDK exposes `signMessage()`, the remote provider path does not surface pending-approval `userUrl` data, so the sandbox calls the connected gateway directly using the SDK-managed session token.
-- macOS Safari blocks async popups more strictly than Chrome. When macOS Safari and a remote gateway are configured, the sandbox connects directly to the configured gateway and primes the SDK wallet popup from the initial `connect()` click so the remote wallet approval can reuse that window. See [Safari remote popup notes](dapps/SAFARI-REMOTE-POPUP.md).
+- macOS Safari blocks async popups more strictly than Chrome. When macOS Safari and a remote gateway are configured, picker mode is upgraded to the direct remote path and primes the SDK wallet popup from the initial `connect()` click so the remote wallet approval can reuse that window. See [Safari remote popup notes](dapps/SAFARI-REMOTE-POPUP.md).
 
 ## Troubleshooting
 
