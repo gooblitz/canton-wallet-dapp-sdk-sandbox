@@ -132,6 +132,8 @@ type DomainSettingsStore = {
   walletDomain?: string;
   registryDomain?: string;
   networkId?: string;
+  remoteUrl?: string;
+  remoteUrls?: RegistryUrlStore;
   // Legacy key kept for backward compatibility with existing localStorage.
   devnetRegistryDomain?: string;
 };
@@ -179,10 +181,18 @@ type ActiveContractParts = {
   hasHoldingInterfaceView: boolean;
 };
 
+type HoldingLookupCandidate = {
+  contractId: string;
+  amount: number;
+};
+
 type HoldingLookupResult = {
   contractIds: string[];
   scannedContracts: number;
   holdingCandidates: number;
+  lockedCandidates: number;
+  unlockedMatchedCandidates: number;
+  unlockedMatchedAmount: number;
   instruments: Record<string, number>;
   templates: Record<string, number>;
 };
@@ -360,7 +370,8 @@ els.walletDomain.value = initialWalletDomain;
 els.devnetRegistryDomain.value = initialDevnetRegistryDomain;
 els.registryApiKey.value = ENV_REGISTRY_API_KEY;
 const defaultRemoteUrl =
-  getConfiguredWalletRpcUrl(initialNetworkId, initialWalletDomain);
+  getSavedWalletRpcUrl(initialNetworkId)
+  || getConfiguredWalletRpcUrl(initialNetworkId, initialWalletDomain);
 els.remoteUrl.value = defaultRemoteUrl;
 els.connectionMode.value = 'picker';
 els.commandsJson.value = JSON.stringify(
@@ -1362,9 +1373,9 @@ function getNetworkPreset(networkId: string): NetworkPreset {
   return NETWORK_PRESETS[normalizeNetworkId(networkId)] || NETWORK_PRESETS[DEFAULT_NETWORK_ID];
 }
 
-function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): string {
+function getEnvWalletRpcUrl(networkId: string): string {
   const normalizedNetworkId = normalizeNetworkId(networkId);
-  const networkSpecificUrl =
+  return (
     ENV_WALLET_RPC_URLS[normalizedNetworkId]
     || (normalizedNetworkId === 'testnet'
       ? import.meta.env.VITE_TESTNET_WALLET_RPC_URL?.toString().trim()
@@ -1374,7 +1385,32 @@ function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): str
       : '')
     || (normalizedNetworkId === DEFAULT_NETWORK_ID
       ? import.meta.env.VITE_WALLET_RPC_URL?.toString().trim()
-      : '');
+      : '')
+    || ''
+  );
+}
+
+function getSavedWalletRpcUrl(networkId: string, store = loadDomainSettingsStore()): string {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  return store.remoteUrls?.[normalizedNetworkId]?.trim()
+    || (store.networkId === normalizedNetworkId ? store.remoteUrl?.trim() : '')
+    || '';
+}
+
+function getWalletRpcPath(rawUrl: string): string {
+  const parsed = parseUrl(rawUrl);
+  if (!parsed) {
+    return '/api/v1/dapp';
+  }
+  const path = parsed.pathname === '/' && !parsed.search
+    ? ''
+    : `${parsed.pathname || ''}${parsed.search}`;
+  return path || '/api/v1/dapp';
+}
+
+function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): string {
+  const normalizedNetworkId = normalizeNetworkId(networkId);
+  const networkSpecificUrl = getEnvWalletRpcUrl(normalizedNetworkId);
   if (networkSpecificUrl) {
     return networkSpecificUrl;
   }
@@ -1387,6 +1423,13 @@ function getConfiguredWalletRpcUrl(networkId: string, walletDomain: string): str
     return joinUrl(walletDomain, '/api/v1/dapp');
   }
   return '';
+}
+
+function getWalletRpcUrlFromDomain(networkId: string, walletDomain: string, fallbackRpcUrl = ''): string {
+  const normalizedWalletDomain = walletDomain.trim();
+  if (!normalizedWalletDomain) return '';
+  const path = getWalletRpcPath(getEnvWalletRpcUrl(networkId) || fallbackRpcUrl);
+  return joinUrl(normalizedWalletDomain, path);
 }
 
 function assetRegistryKeys(networkId: string, instrumentAdmin: string, instrumentId: string): string[] {
@@ -1458,7 +1501,9 @@ function applyNetworkPreset(networkId: string, persist = true): void {
   if (preset.walletDomain) {
     els.walletDomain.value = preset.walletDomain;
   }
-  const walletRpcUrl = getConfiguredWalletRpcUrl(normalizedNetworkId, els.walletDomain.value.trim());
+  const walletRpcUrl =
+    getSavedWalletRpcUrl(normalizedNetworkId)
+    || getConfiguredWalletRpcUrl(normalizedNetworkId, els.walletDomain.value.trim());
   els.remoteUrl.value = walletRpcUrl;
   els.devnetRegistryDomain.value = preset.registryDomain;
   els.scanUrl.value = preset.scanUrl;
@@ -1467,12 +1512,7 @@ function applyNetworkPreset(networkId: string, persist = true): void {
 
   if (persist) {
     localStorage.setItem(NETWORK_ID_STORAGE_KEY, normalizedNetworkId);
-    saveDomainSettingsStore({
-      walletDomain: els.walletDomain.value.trim(),
-      registryDomain: els.devnetRegistryDomain.value.trim(),
-      networkId: normalizedNetworkId,
-      devnetRegistryDomain: els.devnetRegistryDomain.value.trim(),
-    });
+    persistCurrentDomainSettings();
   }
 
   syncWalletIdentityPreview();
@@ -1498,6 +1538,17 @@ function loadDomainSettingsStore(): DomainSettingsStore {
     if (typeof obj.networkId === 'string') {
       out.networkId = normalizeNetworkId(obj.networkId);
     }
+    if (typeof obj.remoteUrl === 'string') {
+      out.remoteUrl = obj.remoteUrl.trim();
+    }
+    if (obj.remoteUrls && typeof obj.remoteUrls === 'object' && !Array.isArray(obj.remoteUrls)) {
+      out.remoteUrls = {};
+      for (const [networkId, remoteUrl] of Object.entries(obj.remoteUrls as Record<string, unknown>)) {
+        if (typeof remoteUrl === 'string' && remoteUrl.trim()) {
+          out.remoteUrls[normalizeNetworkId(networkId)] = remoteUrl.trim();
+        }
+      }
+    }
     if (typeof obj.devnetRegistryDomain === 'string') {
       out.devnetRegistryDomain = obj.devnetRegistryDomain.trim();
     }
@@ -1508,7 +1559,45 @@ function loadDomainSettingsStore(): DomainSettingsStore {
 }
 
 function saveDomainSettingsStore(store: DomainSettingsStore): void {
-  localStorage.setItem(DOMAIN_SETTINGS_STORAGE_KEY, JSON.stringify(store));
+  const current = loadDomainSettingsStore();
+  const nextRemoteUrls: RegistryUrlStore = { ...current.remoteUrls };
+  if (store.remoteUrls !== undefined) {
+    for (const [networkId, remoteUrl] of Object.entries(store.remoteUrls)) {
+      const normalizedNetworkId = normalizeNetworkId(networkId);
+      const normalizedRemoteUrl = remoteUrl.trim();
+      if (normalizedRemoteUrl) {
+        nextRemoteUrls[normalizedNetworkId] = normalizedRemoteUrl;
+      } else {
+        delete nextRemoteUrls[normalizedNetworkId];
+      }
+    }
+  }
+
+  const next: DomainSettingsStore = {
+    ...current,
+    ...store,
+    remoteUrls: nextRemoteUrls,
+  };
+  if (Object.keys(nextRemoteUrls).length === 0) {
+    delete next.remoteUrls;
+  }
+
+  localStorage.setItem(DOMAIN_SETTINGS_STORAGE_KEY, JSON.stringify({
+    ...next,
+  }));
+}
+
+function persistCurrentDomainSettings(): void {
+  const networkId = getSelectedNetworkId();
+  const remoteUrl = els.remoteUrl.value.trim();
+  saveDomainSettingsStore({
+    walletDomain: els.walletDomain.value.trim(),
+    registryDomain: els.devnetRegistryDomain.value.trim(),
+    networkId,
+    remoteUrl,
+    remoteUrls: { [networkId]: remoteUrl },
+    devnetRegistryDomain: els.devnetRegistryDomain.value.trim(),
+  });
 }
 
 function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string): string {
@@ -1524,7 +1613,8 @@ function buildScanAnsEntriesEndpoint(scanBaseURL: string, adminPartyId: string):
   return joinUrl(scanBaseURL, ansEntriesPath);
 }
 
-function applyDomainSettings(persist = true): void {
+function applyDomainSettings(persist = true, options: { updateRemoteUrl?: boolean } = {}): void {
+  const updateRemoteUrl = options.updateRemoteUrl ?? true;
   const networkId = getSelectedNetworkId();
   const networkPreset = getNetworkPreset(networkId);
   const selectedAsset = getSelectedAssetPreset();
@@ -1536,7 +1626,9 @@ function applyDomainSettings(persist = true): void {
   const derivedRegistryURL = selectedAsset?.registryUrl || networkPreset.defaultRegistryUrl;
   els.walletDomain.value = walletDomain;
   els.devnetRegistryDomain.value = devnetRegistryDomain;
-  els.remoteUrl.value = getConfiguredWalletRpcUrl(networkId, walletDomain);
+  if (updateRemoteUrl) {
+    els.remoteUrl.value = getWalletRpcUrlFromDomain(networkId, walletDomain, els.remoteUrl.value.trim());
+  }
   els.registryUrl.value = derivedRegistryURL;
   els.scanUrl.value = networkPreset.scanUrl || derivedRegistryURL;
   rememberRegistryUrlForNetwork(
@@ -1546,12 +1638,7 @@ function applyDomainSettings(persist = true): void {
     selectedAsset?.instrumentId || '',
   );
   if (persist) {
-    saveDomainSettingsStore({
-      walletDomain,
-      registryDomain: devnetRegistryDomain,
-      networkId,
-      devnetRegistryDomain,
-    });
+    persistCurrentDomainSettings();
   }
 
   syncWalletIdentityPreview();
@@ -1560,7 +1647,7 @@ function applyDomainSettings(persist = true): void {
 
 function applyDomainSettingsFromInputs(): void {
   try {
-    applyDomainSettings(true);
+    applyDomainSettings(true, { updateRemoteUrl: true });
     appendLog('OK', 'settings -> applied domain defaults', {
       walletDomain: els.walletDomain.value.trim(),
       registryDomain: els.devnetRegistryDomain.value.trim(),
@@ -1572,6 +1659,23 @@ function applyDomainSettingsFromInputs(): void {
   } catch (err) {
     const normalized = normalizeError(err);
     appendLog('ERR', 'settings -> failed to apply domains', normalized);
+  }
+}
+
+function applyRegistrySettingsFromInputs(): void {
+  try {
+    applyDomainSettings(true, { updateRemoteUrl: false });
+    appendLog('OK', 'settings -> applied registry defaults', {
+      walletDomain: els.walletDomain.value.trim(),
+      registryDomain: els.devnetRegistryDomain.value.trim(),
+      networkId: getSelectedNetworkId(),
+      remoteUrl: els.remoteUrl.value.trim(),
+      registryUrl: els.registryUrl.value.trim(),
+      scanUrl: els.scanUrl.value.trim(),
+    });
+  } catch (err) {
+    const normalized = normalizeError(err);
+    appendLog('ERR', 'settings -> failed to apply registry defaults', normalized);
   }
 }
 
@@ -1679,6 +1783,7 @@ function transferContextCacheKey(
   amount: string,
   instrumentAdmin: string,
   instrumentId: string,
+  inputHoldingCids: string[],
 ): string {
   return [
     networkId,
@@ -1689,6 +1794,7 @@ function transferContextCacheKey(
     amount,
     instrumentAdmin,
     instrumentId,
+    uniqueStrings(inputHoldingCids).sort().join(','),
   ].join('::');
 }
 
@@ -1812,6 +1918,55 @@ function extractAmountFromPayload(payload: Record<string, unknown>): string {
   }
 
   return asAmountString(payload.quantity);
+}
+
+function parseAmountNumber(raw: string): number | null {
+  const amount = Number.parseFloat(raw);
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function isHoldingLocked(payload: Record<string, unknown>, now = new Date()): boolean {
+  const lock = asObject(payload.lock);
+  if (!lock) return false;
+
+  const expiresAt = asString(lock.expiresAt);
+  if (!expiresAt) return true;
+
+  const expiresAtDate = new Date(expiresAt);
+  if (Number.isNaN(expiresAtDate.getTime())) return true;
+
+  return now < expiresAtDate;
+}
+
+function selectHoldingContractIdsForAmount(
+  candidates: HoldingLookupCandidate[],
+  requestedAmount = '',
+): string[] {
+  const amount = parseAmountNumber(requestedAmount);
+  if (amount === null) {
+    return candidates.map((candidate) => candidate.contractId);
+  }
+
+  const exactAmount = candidates.find((candidate) => candidate.amount === amount);
+  if (exactAmount) {
+    return [exactAmount.contractId];
+  }
+
+  const sorted = [...candidates].sort((left, right) => left.amount - right.amount);
+  const largest = sorted.pop();
+  if (!largest) return [];
+
+  const selected = [largest];
+  let selectedAmount = largest.amount;
+  for (const candidate of sorted) {
+    if (selectedAmount >= amount) break;
+    selected.push(candidate);
+    selectedAmount += candidate.amount;
+  }
+
+  return selectedAmount >= amount
+    ? selected.map((candidate) => candidate.contractId)
+    : [];
 }
 
 function extractInstrumentIdFromPayload(payload: Record<string, unknown>): { admin: string; id: string } | null {
@@ -2545,7 +2700,7 @@ async function dappLedgerApiJSON(
     params: {
       requestMethod,
       resource,
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(body !== undefined ? { body } : {}),
     },
   });
   return parseLedgerApiJSONResponse(result);
@@ -2556,12 +2711,14 @@ function extractHoldingContractIdsFromActiveContracts(
   ownerPartyId: string,
   instrumentId = '',
   instrumentAdmin = '',
+  requestedAmount = '',
 ): HoldingLookupResult {
-  const ids: string[] = [];
+  const candidates: HoldingLookupCandidate[] = [];
   const instruments: Record<string, number> = {};
   const templates: Record<string, number> = {};
   const contracts = extractActiveContractParts(payload);
   let holdingCandidates = 0;
+  let lockedCandidates = 0;
 
   for (const contract of contracts) {
     if (!isHoldingContractParts(contract)) continue;
@@ -2577,13 +2734,25 @@ function extractHoldingContractIdsFromActiveContracts(
     }
 
     if (!holdingMatchesInstrument(contract.templateId, contract.payload, instrumentId, instrumentAdmin)) continue;
-    ids.push(contract.contractId);
+    if (isHoldingLocked(contract.payload)) {
+      lockedCandidates += 1;
+      continue;
+    }
+
+    candidates.push({
+      contractId: contract.contractId,
+      amount: parseAmountNumber(extractAmountFromPayload(contract.payload)) ?? 0,
+    });
   }
 
+  const contractIds = selectHoldingContractIdsForAmount(candidates, requestedAmount);
   return {
-    contractIds: uniqueStrings(ids),
+    contractIds: uniqueStrings(contractIds),
     scannedContracts: contracts.length,
     holdingCandidates,
+    lockedCandidates,
+    unlockedMatchedCandidates: candidates.length,
+    unlockedMatchedAmount: candidates.reduce((sum, candidate) => sum + candidate.amount, 0),
     instruments,
     templates,
   };
@@ -2635,6 +2804,9 @@ function mergeHoldingLookupResults(results: HoldingLookupResult[]): HoldingLooku
     contractIds: [],
     scannedContracts: 0,
     holdingCandidates: 0,
+    lockedCandidates: 0,
+    unlockedMatchedCandidates: 0,
+    unlockedMatchedAmount: 0,
     instruments: {},
     templates: {},
   };
@@ -2643,6 +2815,9 @@ function mergeHoldingLookupResults(results: HoldingLookupResult[]): HoldingLooku
     merged.contractIds.push(...result.contractIds);
     merged.scannedContracts += result.scannedContracts;
     merged.holdingCandidates += result.holdingCandidates;
+    merged.lockedCandidates += result.lockedCandidates;
+    merged.unlockedMatchedCandidates += result.unlockedMatchedCandidates;
+    merged.unlockedMatchedAmount += result.unlockedMatchedAmount;
     for (const [instrument, count] of Object.entries(result.instruments)) {
       merged.instruments[instrument] = (merged.instruments[instrument] ?? 0) + count;
     }
@@ -2667,6 +2842,7 @@ async function getPrimaryHoldingContractIds(
   ownerPartyId: string,
   instrumentId = '',
   instrumentAdmin = '',
+  requestedAmount = '',
 ): Promise<string[]> {
   const ledgerEndPayload = await dappLedgerApiJSON(p, 'GET', '/v2/state/ledger-end');
   const offset = asInt(asObject(ledgerEndPayload)?.offset);
@@ -2678,6 +2854,7 @@ async function getPrimaryHoldingContractIds(
     senderPartyId: ownerPartyId,
     instrumentId: instrumentId || undefined,
     instrumentAdmin: instrumentAdmin || undefined,
+    requestedAmount: requestedAmount || undefined,
     ledgerEndOffset: offset,
   });
 
@@ -2695,17 +2872,22 @@ async function getPrimaryHoldingContractIds(
         ownerPartyId,
         instrumentId,
         instrumentAdmin,
+        requestedAmount,
       );
       appendDiagnosticsLog('INFO', 'holdings lookup -> active-contracts response', {
         mode,
         ...summarizeActiveContractsPayload(activeContractsPayload),
         extractedContracts: lookupResult.scannedContracts,
         holdingCandidates: lookupResult.holdingCandidates,
+        lockedCandidates: lookupResult.lockedCandidates,
+        unlockedMatchedCandidates: lookupResult.unlockedMatchedCandidates,
+        unlockedMatchedAmount: lookupResult.unlockedMatchedAmount,
       });
       lookupResults.push(lookupResult);
       if (lookupResult.contractIds.length > 0) {
         appendLog('INFO', 'holdings lookup -> selected sender holdings', {
           instrumentId: instrumentId || undefined,
+          requestedAmount: requestedAmount || undefined,
           count: lookupResult.contractIds.length,
         });
         appendDiagnosticsLog('INFO', 'holdings lookup -> selected sender holding details', {
@@ -2730,6 +2912,9 @@ async function getPrimaryHoldingContractIds(
     instrumentId: instrumentId || undefined,
     scannedContracts: merged.scannedContracts,
     holdingCandidates: merged.holdingCandidates,
+    lockedCandidates: merged.lockedCandidates,
+    unlockedMatchedCandidates: merged.unlockedMatchedCandidates,
+    unlockedMatchedAmount: merged.unlockedMatchedAmount,
     foundInstruments: foundInstruments || undefined,
   });
   appendDiagnosticsLog('INFO', 'holdings lookup -> no matching sender holding details', {
@@ -2743,7 +2928,11 @@ async function getPrimaryHoldingContractIds(
     ? ` Visible holdings were for: ${foundInstruments}.`
     : (merged.scannedContracts === 0
         ? ' dApp ledgerApi returned zero active contracts for the sender party; check party selection, funding, or the wallet gateway ledgerApi proxy.'
-        : ' No matching Holding contracts were visible through ledgerApi.');
+        : (merged.unlockedMatchedCandidates > 0
+            ? ` Unlocked matching holdings total ${merged.unlockedMatchedAmount}, below requested amount ${requestedAmount}.`
+            : (merged.lockedCandidates > 0
+                ? ' Matching holdings were locked. Wait for the lock to expire or use unlocked funds.'
+                : ' No matching Holding contracts were visible through ledgerApi.')));
   throw new Error(
     `No sender holdings${assetLabel} found.${detail} Fund the sender wallet before preparing TransferFactory_Transfer.`,
   );
@@ -3167,6 +3356,7 @@ async function resolveTransferFactoryContext(
         senderPartyId,
         transferInput.instrumentId,
         instrumentAdmin,
+        transferInput.amount,
       );
 
   const cacheKey = transferContextCacheKey(
@@ -3178,6 +3368,7 @@ async function resolveTransferFactoryContext(
     transferInput.amount,
     instrumentAdmin,
     transferInput.instrumentId,
+    inputHoldingCids,
   );
 
   if (!forceRefresh) {
@@ -3580,6 +3771,7 @@ async function ensureTransferFactoryInputHoldingCids(
       senderPartyId,
       asString(transferInstrument?.id),
       asString(transferInstrument?.admin),
+      asString(transfer.amount),
     );
     transfer.inputHoldingCids = holdingContractIds;
     injectedCount += holdingContractIds.length;
@@ -3807,8 +3999,9 @@ els.networkPreset.addEventListener('change', () => {
 });
 
 els.walletDomain.addEventListener('change', applyDomainSettingsFromInputs);
-els.devnetRegistryDomain.addEventListener('change', applyDomainSettingsFromInputs);
+els.devnetRegistryDomain.addEventListener('change', applyRegistrySettingsFromInputs);
 els.remoteUrl.addEventListener('change', () => {
+  persistCurrentDomainSettings();
   syncWalletIdentityPreview();
   syncWalletIntentFormFromSettings();
 });
@@ -4095,6 +4288,7 @@ els.prefillTransferCommand.addEventListener('click', () => {
         senderPartyId,
         transferInput.instrumentId,
         transferInput.instrumentAdmin || transferInput.expectedAdmin || '',
+        transferInput.amount,
       );
     }
 

@@ -27,6 +27,7 @@ Optional dApp env for registry discovery:
 ```bash
 VITE_NETWORK='devnet'
 VITE_WALLET_RPC_URLS_JSON='{"devnet":"https://lat-dn.cddev.site/api/v1/dapp","testnet":"https://lat-tn.cddev.site/api/v1/dapp","mainnet":"https://lat-mn.cddev.site/api/v1/dapp"}'
+VITE_WALLET_DOMAIN='https://lat-dn.cddev.site'
 VITE_TESTNET_WALLET_RPC_URL='https://lat-tn.cddev.site/api/v1/dapp'
 VITE_MAINNET_WALLET_RPC_URL='https://lat-mn.cddev.site/api/v1/dapp'
 VITE_REGISTRY_DOMAIN='https://sp-lat-dn.cddev.site' # default domain used by "Registry Domain (Default)"
@@ -49,6 +50,13 @@ UTILITIES_INSTRUMENT_CONFIG_TESTNET_URL='https://api.utilities.digitalasset-stag
 UTILITIES_INSTRUMENT_CONFIG_MAINNET_URL='https://api.utilities.digitalasset.com/api/utilities/v0/contract/instrument-configuration/all'
 # Optional upstream auth header:
 # SCAN_PROXY_UPSTREAM_AUTH='Bearer <token>'
+```
+
+For a local wallet gateway whose dApp JSON-RPC endpoint is pluralized, use the full endpoint URL:
+
+```bash
+VITE_WALLET_DOMAIN='http://wallet-devnet.localhost:5183'
+VITE_WALLET_RPC_URL='http://wallet-devnet.localhost:5183/api/v1/dapps'
 ```
 
 ## Run
@@ -101,7 +109,10 @@ Open: `http://127.0.0.1:4174`
 
 - `prepareExecute*` needs valid command payloads for the selected network's packages/contracts.
 - The default command JSON is only a template and will usually fail until replaced.
-- Transfer context lookup is cached for a short TTL per `(networkId, partyId, registryUrl, transfer args)`.
+- The `Preferred Wallet Gateway URL` field is a per-network UI override. Env vars seed defaults; editing the field wins until it is cleared or changed again.
+- When deriving a gateway URL from `Wallet Domain`, the path comes from the configured network RPC URL when one is present. This supports both `/api/v1/dapp` and local plural `/api/v1/dapps` gateways.
+- Transfer context lookup is cached for a short TTL per `(networkId, partyId, registryUrl, transfer args, input holdings)`.
+- The transfer helper filters out currently locked token-standard holdings, allows expired locks, and selects an exact or sufficient unlocked holding set for the requested amount.
 - Default fallbacks (when env vars are unset):
   - `VITE_WALLET_RPC_URL=https://lat-dn.cddev.site/api/v1/dapp`
   - `VITE_TOKEN_REGISTRY_URL=/api/registry-proxy`
