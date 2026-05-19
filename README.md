@@ -52,11 +52,11 @@ UTILITIES_INSTRUMENT_CONFIG_MAINNET_URL='https://api.utilities.digitalasset.com/
 # SCAN_PROXY_UPSTREAM_AUTH='Bearer <token>'
 ```
 
-For a local wallet gateway whose dApp JSON-RPC endpoint is pluralized, use the full endpoint URL:
+For a local wallet gateway, use the official dApp JSON-RPC endpoint path:
 
 ```bash
 VITE_WALLET_DOMAIN='http://wallet-devnet.localhost:5183'
-VITE_WALLET_RPC_URL='http://wallet-devnet.localhost:5183/api/v1/dapps'
+VITE_WALLET_RPC_URL='http://wallet-devnet.localhost:5183/api/v1/dapp'
 ```
 
 ## Run
@@ -110,7 +110,7 @@ Open: `http://127.0.0.1:4174`
 - `prepareExecute*` needs valid command payloads for the selected network's packages/contracts.
 - The default command JSON is only a template and will usually fail until replaced.
 - The `Preferred Wallet Gateway URL` field is a per-network UI override. Env vars seed defaults; editing the field wins until it is cleared or changed again.
-- When deriving a gateway URL from `Wallet Domain`, the path comes from the configured network RPC URL when one is present. This supports both `/api/v1/dapp` and local plural `/api/v1/dapps` gateways.
+- When deriving a gateway URL from `Wallet Domain`, the path comes from the configured network RPC URL when one is present. The official dApp JSON-RPC endpoint path is `/api/v1/dapp`.
 - Transfer context lookup is cached for a short TTL per `(networkId, partyId, registryUrl, transfer args, input holdings)`.
 - The transfer helper filters out currently locked token-standard holdings, allows expired locks, and selects an exact or sufficient unlocked holding set for the requested amount.
 - Default fallbacks (when env vars are unset):
